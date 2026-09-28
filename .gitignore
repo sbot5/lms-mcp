@@ -1,0 +1,20 @@
+# build output
+*.exe
+*.exe~
+/lms-mcp
+
+# secrets never live in this repo
+.env
+.env.*
+!.env.example
+config.json
+sync.json
+.lms-sync/
+.lms-sync-logs/
+_discussion.*
+_updates.md
+ed-lessons/
+courses/
+dist/
+*.log
+coverage.out

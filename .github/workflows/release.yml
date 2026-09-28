@@ -1,0 +1,28 @@
+name: Release
+on:
+  push:
+    tags: ['v*']
+permissions:
+  contents: write
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: stable
+      - run: go test ./...
+      - run: go vet ./...
+      - name: Build archives
+        shell: pwsh
+        run: ./scripts/build-release.ps1
+      - name: Publish release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $assets = @(Get-ChildItem dist -File | ForEach-Object FullName)
+          gh release create $env:RELEASE_TAG @assets --title "lms-mcp $env:RELEASE_TAG" --notes-file RELEASE_NOTES.md --verify-tag
+          if ($LASTEXITCODE -ne 0) { throw 'Release upload failed.' }
