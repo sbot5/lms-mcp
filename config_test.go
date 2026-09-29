@@ -220,3 +220,27 @@ func TestEnvQuotesBOMAndNoSecretInErrors(t *testing.T) {
 		t.Fatal("unsafe parse error")
 	}
 }
+
+func TestSafeTargetAllowsOSAncestorLinksButRejectsOutputLinks(t *testing.T) {
+	base := t.TempDir()
+	real := filepath.Join(base, "actual")
+	root := filepath.Join(base, "alias", "course")
+	if err := os.MkdirAll(filepath.Join(real, "course"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(real, filepath.Join(base, "alias")); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := safeTarget(root, "file.md"); err != nil {
+		t.Fatalf("legitimate ancestor rejected: %v", err)
+	}
+	if err := os.Symlink(real, filepath.Join(root, "redirect")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := safeTarget(root, filepath.Join("redirect", "file.md")); err == nil {
+		t.Fatal("symlink within output accepted")
+	}
+	if _, err := safeTarget(filepath.Join(base, "alias"), "file.md"); err == nil {
+		t.Fatal("symlink root accepted")
+	}
+}

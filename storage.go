@@ -115,7 +115,8 @@ func safeTarget(root, rel string) (string, error) {
 		return "", fmt.Errorf("unsafe output path %q", rel)
 	}
 	p := filepath.Join(root, rel)
-	// Never follow links or Windows junctions through generated output directories.
+	// Reject links in the configured root and generated descendants. Ancestors of
+	// that user-selected root may legitimately be OS links (e.g. /var on macOS).
 	for cur := p; ; cur = filepath.Dir(cur) {
 		info, err := os.Lstat(cur)
 		if err == nil && info.Mode()&os.ModeSymlink != 0 {
@@ -124,7 +125,7 @@ func safeTarget(root, rel string) (string, error) {
 		if err != nil && !errors.Is(err, os.ErrNotExist) {
 			return "", err
 		}
-		if cur == filepath.Dir(cur) {
+		if cur == filepath.Clean(root) || cur == filepath.Dir(cur) {
 			break
 		}
 	}
