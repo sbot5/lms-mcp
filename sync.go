@@ -17,6 +17,8 @@ type courseResult struct {
 	Lessons        int    `json:"lessons"`
 	Changes        int    `json:"changes"`
 	DetailsFetched int    `json:"details_fetched"`
+	Materials      int    `json:"materials,omitempty"`
+	Downloads      int    `json:"downloads,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 type syncResult struct {
@@ -62,6 +64,9 @@ func stableThreads(ctx context.Context, c *edClient, id int) ([]edThread, error)
 
 func syncCourse(ctx context.Context, c *edClient, cfg syncConfig, co courseConfig, force bool) (courseResult, error) {
 	result := courseResult{Course: co.Code}
+	if c == nil {
+		return result, fmt.Errorf("Ed credentials unavailable; check env_file and ED_API_TOKEN")
+	}
 	lock, err := lockCourse(co)
 	if err != nil {
 		return result, fmt.Errorf("course already syncing or lock unavailable: %w", err)
@@ -175,12 +180,32 @@ func syncAll(ctx context.Context, c *edClient, cfg syncConfig, force bool) (sync
 		r.Courses = append(r.Courses, x)
 		fmt.Fprintf(os.Stderr, "%s: threads=%d lessons=%d changes=%d error=%s\n", co.Code, x.Threads, x.Lessons, x.Changes, x.Error)
 	}
+	if cfg.Moodle != nil {
+		mc, authErr := newMoodleClient(*cfg.Moodle)
+		for _, co := range cfg.Moodle.Courses {
+			if ctx.Err() != nil {
+				errs = append(errs, ctx.Err())
+				break
+			}
+			v := courseResult{Course: "moodle:" + co.Code}
+			err := authErr
+			if err == nil {
+				v, err = syncMoodleCourse(ctx, mc, *cfg.Moodle, co, force)
+			}
+			if err != nil {
+				v.Error = err.Error()
+				errs = append(errs, fmt.Errorf("%s: %w", v.Course, err))
+			}
+			r.Courses = append(r.Courses, v)
+			fmt.Fprintf(os.Stderr, "%s: materials=%d changes=%d error=%s\n", v.Course, v.Materials, v.Changes, v.Error)
+		}
+	}
 	return r, errors.Join(errs...)
 }
 
 func updatesMarkdown(co courseConfig, changes []change) string {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "# %s — Ed updates\n\nTimes are detection times (UTC). First sync creates a baseline.\nUnavailable means deleted, hidden, or no longer visible; old lesson files are retained.\n\n", co.Code)
+	fmt.Fprintf(&b, "# %s — Updates\n\nTimes are detection times (UTC). First sync creates a baseline.\nUnavailable means deleted, hidden, or no longer visible; previous material files are retained.\n\n", co.Code)
 	for i := len(changes) - 1; i >= 0; i-- {
 		e := changes[i]
 		if e.Private && !co.IncludePrivate {
@@ -219,7 +244,7 @@ func whatsNew(cfg syncConfig, in newsInput) (newsResult, error) {
 		return r, fmt.Errorf("limit must be 1..1000")
 	}
 	found := false
-	for _, co := range cfg.Courses {
+	for _, co := range allStorageCourses(cfg) {
 		if in.Course != "" && in.Course != co.Code {
 			continue
 		}

@@ -186,7 +186,7 @@ func TestMCPDiscoveryIdentityAndPrivateThreadBoundary(t *testing.T) {
 	}
 	defer cs.Close()
 	list, err := cs.ListTools(ctx, nil)
-	if err != nil || len(list.Tools) != 4 {
+	if err != nil || len(list.Tools) != 5 {
 		t.Fatalf("tools: %v %v", list, err)
 	}
 	identity, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ed_whoami", Arguments: map[string]any{}})

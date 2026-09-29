@@ -4,7 +4,7 @@
 
 A configurable, read-only Ed Discussion and Lessons synchronizer with a stdio MCP server. Save course posts, nested replies, lessons and attachments into local folders, then ask an MCP client what changed.
 
-**Ed is supported. Moodle is not implemented.** There is no GUI in this release; an interactive setup wizard and a JSON configuration cover setup and settings. The sync engine is independent of the interface, so a local settings page can be added later.
+**Ed is supported; this development branch adds a Moodle preview.** Moodle token/Cookie materials and iCalendar feeds are covered by offline fixtures, with live-site acceptance still pending. See [Moodle setup and limitations](docs/moodle.md). The published v0.3.0 release remains Ed-only. There is no GUI; Ed's setup wizard and JSON settings cover configuration.
 
 ## Install
 
@@ -138,6 +138,7 @@ On Windows, use the `.exe` path and escape backslashes in JSON. Keep the connect
 | `whats_new` | Query detected changes. Optional `since` (RFC3339), `course`, `staff_only`, and `limit`; returns per-course freshness. |
 | `get_thread` | Fetch a complete thread by `thread_id`, restricted to configured courses and the private-post policy. |
 | `sync_now` | Synchronize configured courses. Optional `full` forces detail and attachment refresh. |
+| `get_moodle_calendar` | Read a Moodle course's successfully cached calendar events and freshness by `course` code; no network request. |
 
 MCP uses stdio, with progress on stderr. Scheduling is independent: the daily job continues when the MCP client is closed.
 
@@ -172,5 +173,7 @@ go build -trimpath -buildvcs=false .
 ```
 
 Tests use synthetic fixtures; no real token or course data is required. CI tests Windows, Linux and macOS. Tagged releases produce amd64/arm64 archives and SHA-256 checksums. Build locally with `pwsh -File scripts/build-release.ps1`; choose a fresh output directory for each build.
+
+The Moodle preview also supports Moodle-only configurations (`courses: []` with `moodle.courses`). `sync`, `status`, and `whats-new` include both providers; use `moodle:COURSE_CODE` to filter Moodle changes. Moodle credentials and optional calendar URLs live in its separate private env file. The Ed `init` wizard is unchanged; start Moodle setup from `moodle.example.json`.
 
 MIT licensed. This is an independent project, not an official Ed product.

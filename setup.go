@@ -183,11 +183,12 @@ type courseStatus struct {
 	DiscussionsEnabled bool      `json:"discussions_enabled"`
 	LessonsEnabled     bool      `json:"lessons_enabled"`
 	Error              string    `json:"error,omitempty"`
+	Materials          int       `json:"cached_materials,omitempty"`
 }
 
 func syncStatus(cfg syncConfig) ([]courseStatus, error) {
 	r := []courseStatus{}
-	for _, co := range cfg.Courses {
+	for _, co := range allStorageCourses(cfg) {
 		s, err := readState(co)
 		v := courseStatus{Course: co.Code, Directory: co.Directory, DiscussionsEnabled: enabled(co.Discussions), LessonsEnabled: co.Lessons}
 		if err != nil {
@@ -196,6 +197,7 @@ func syncStatus(cfg syncConfig) ([]courseStatus, error) {
 			v.LastSuccess = s.LastSuccess
 			v.Threads = len(s.Threads)
 			v.Lessons = len(s.Lessons)
+			v.Materials = len(s.MoodleFiles)
 		}
 		r = append(r, v)
 	}

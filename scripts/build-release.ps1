@@ -20,7 +20,9 @@ try {
         $binary = if ($env:GOOS -eq 'windows') { 'lms-mcp.exe' } else { 'lms-mcp' }
         & go build -trimpath -buildvcs=false '-ldflags=-s -w' -o (Join-Path $stage $binary) .
         if ($LASTEXITCODE -ne 0) { throw "Build failed for $platform" }
-        foreach ($name in @('README.md','LICENSE','sync.example.json','.env.example')) { Copy-Item -LiteralPath (Join-Path $root $name) -Destination $stage }
+        foreach ($name in @('README.md','LICENSE','sync.example.json','.env.example','moodle.example.json','moodle.env.example')) { Copy-Item -LiteralPath (Join-Path $root $name) -Destination $stage }
+        New-Item -ItemType Directory -Path (Join-Path $stage 'docs') | Out-Null
+        Copy-Item -LiteralPath (Join-Path $root 'docs/moodle.md') -Destination (Join-Path $stage 'docs')
         New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') | Out-Null
         foreach ($name in @('install-task.ps1','run-sync.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $stage 'scripts') }
         if ($env:GOOS -eq 'windows') {

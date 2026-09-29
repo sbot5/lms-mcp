@@ -10,4 +10,6 @@ API requests use the configured Ed token only with `https://edstem.org/api`; att
 
 There is no public HTTP server or GUI listener. MCP uses stdio. Review which MCP clients you trust: `sync_now` writes to the configured output folders and `get_thread` retrieves data from enrolled courses.
 
+The Moodle development preview accepts a user-supplied session Cookie or web-service token from a private env file. It never extracts browser sessions or automates SSO/MFA. Its optional iCalendar export URL is also a credential and belongs only in that env file. Moodle requests are restricted to the configured site, cross-origin/POST redirects are refused, and response bodies/URLs are redacted from errors. Cookie-mode discovery is theme-dependent and requires live validation before production use. No real institution session was used in offline tests.
+
 For vulnerabilities, use this repository's private vulnerability reporting feature when available. Do not publish credentials or course material in public issues.

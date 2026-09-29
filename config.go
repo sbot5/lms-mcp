@@ -38,6 +38,7 @@ type syncConfig struct {
 	DownloadAttachments *bool          `json:"download_attachments,omitempty"`
 	Privacy             privacyConfig  `json:"privacy"`
 	Schedule            scheduleConfig `json:"schedule"`
+	Moodle              *moodleConfig  `json:"moodle,omitempty"`
 }
 
 func enabled(value *bool) bool { return value == nil || *value }
@@ -97,7 +98,7 @@ func normalizeConfig(cfg syncConfig, path string) (syncConfig, error) {
 	if cfg.EnvFile != "" && !filepath.IsAbs(cfg.EnvFile) {
 		cfg.EnvFile = filepath.Join(filepath.Dir(path), cfg.EnvFile)
 	}
-	if len(cfg.Courses) == 0 {
+	if len(cfg.Courses) == 0 && (cfg.Moodle == nil || len(cfg.Moodle.Courses) == 0) {
 		return cfg, fmt.Errorf("config must contain courses")
 	}
 	if cfg.FullRefreshHours == 0 {
@@ -138,6 +139,11 @@ func normalizeConfig(cfg syncConfig, path string) (syncConfig, error) {
 			if a != b && strings.HasPrefix(a, b+string(filepath.Separator)) {
 				return cfg, fmt.Errorf("course directories must not overlap")
 			}
+		}
+	}
+	if cfg.Moodle != nil {
+		if err := normalizeMoodle(cfg.Moodle, path, dirs); err != nil {
+			return cfg, err
 		}
 	}
 	return cfg, nil

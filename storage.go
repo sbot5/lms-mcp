@@ -63,14 +63,16 @@ type change struct {
 	Private    bool      `json:"private,omitempty"`
 }
 type syncState struct {
-	Version     int                 `json:"version"`
-	CourseID    int                 `json:"course_id"`
-	Region      string              `json:"region,omitempty"`
-	LastSuccess time.Time           `json:"last_success"`
-	Threads     map[int]threadCache `json:"threads"`
-	Lessons     map[int]lessonCache `json:"lessons"`
-	Files       map[string]string   `json:"files"`
-	Changes     []change            `json:"changes"`
+	Version      int                        `json:"version"`
+	CourseID     int                        `json:"course_id"`
+	Region       string                     `json:"region,omitempty"`
+	LastSuccess  time.Time                  `json:"last_success"`
+	Threads      map[int]threadCache        `json:"threads"`
+	Lessons      map[int]lessonCache        `json:"lessons"`
+	Files        map[string]string          `json:"files"`
+	Changes      []change                   `json:"changes"`
+	MoodleFiles  map[string]moodleFileState `json:"moodle_files,omitempty"`
+	CalendarHash string                     `json:"calendar_hash,omitempty"`
 }
 
 func readState(co courseConfig) (syncState, error) {
