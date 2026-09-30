@@ -13,18 +13,18 @@ Download an archive for your OS and CPU from [Releases](https://github.com/sbot5
 Or build from source with **Go 1.25 or newer**:
 
 ```sh
-git clone https://github.com/sbot5/lms-mcp.git
+git clone --branch codex/moodle-sync https://github.com/sbot5/lms-mcp.git
 cd lms-mcp
-go build -trimpath -buildvcs=false -o lms-mcp .
-# Windows: go build -trimpath -buildvcs=false -o lms-mcp.exe .
+go build -trimpath -buildvcs=false -o bin/lms-mcp ./cmd/lms-mcp
+# Windows: pwsh -File scripts/build.ps1 (writes bin/lms-mcp.exe)
 ```
 
-The examples below assume `lms-mcp` is on PATH. On Windows, use `.\lms-mcp.exe` when running from the extracted directory.
+These source commands target the current development preview; the published v0.3.0 release remains Ed-only. The examples below assume `lms-mcp` is on PATH. For a source checkout, use `./bin/lms-mcp` or `.\bin\lms-mcp.exe`. Release archives contain the binary at their root.
 
 ## First setup
 
 1. Create an Ed API token in your own Ed account settings.
-2. In a **private folder outside this repository**, create `.env` from `.env.example` and replace the placeholder:
+2. In a **private folder outside this repository**, create `.env` from `examples/.env.example` and replace the placeholder:
 
 ```dotenv
 ED_API_TOKEN=replace-with-your-own-token
@@ -51,7 +51,7 @@ lms-mcp whats-new -config /absolute/private/config.json -staff-only
 
 ## Configuration
 
-Copy `sync.example.json` or edit the wizard-generated file. Relative paths resolve against the config file location, not the working directory.
+Copy `examples/sync.example.json` to a private folder or edit the wizard-generated file. Relative paths resolve against the config file location, not the working directory.
 
 ```json
 {
@@ -103,7 +103,7 @@ Requires **PowerShell 7** and a signed-in Windows user. From the extracted relea
 Get-ScheduledTask -TaskName 'LMS-MCP-Ed-*'
 ```
 
-The task name is derived from the config path, so separate configurations have separate tasks. The installer prints the name and next run time. Supply `-Executable` if the binary is installed elsewhere. Supply `-EnvFile` to override the config's token-file path. `-TaskName` is available for an explicit name; unmanaged tasks are never overwritten or removed.
+The task name is derived from the config path, so separate configurations have separate tasks. The installer prints the name and next run time. It first looks for `bin/lms-mcp.exe` in a source checkout, then the root-level binary in a release archive. Supply `-Executable` for any other location. Supply `-EnvFile` to override the config's token-file path. `-TaskName` is available for an explicit name; unmanaged tasks are never overwritten or removed.
 
 The task runs hidden with limited privileges. It checks at the configured time and at logon, catches missed starts when possible, and skips repeated runs after a success on the same local date unless the configuration changes. It runs `sync -full`, including attachment content checks. Failed runs retry up to three times at 15-minute intervals. It cannot run while the computer is off or the user is logged out. No popup notifications are installed.
 
@@ -166,14 +166,32 @@ Unavailable lessons leave the current index but their old files remain. Backups 
 
 ## Development
 
+```text
+cmd/lms-mcp/         executable entry point
+internal/app/        CLI, MCP, configuration, synchronization and export policy
+internal/ed/         Ed HTTP client and response models
+internal/moodle/     Moodle HTTP, HTML discovery and iCalendar parsing
+internal/render/     pure Ed XML-to-Markdown conversion
+internal/filelock/   Windows/Unix process locks
+examples/           synthetic configuration and credential templates
+docs/               architecture, Moodle guide and versioned release notes
+scripts/            build, checks, packaging and Windows scheduling
+bin/                local builds (ignored)
+dist/               release archives (ignored)
+```
+
+See [architecture](docs/architecture.md) and [contributing](CONTRIBUTING.md) for package boundaries and the release checklist.
+
 ```sh
 go test ./...
 go vet ./...
-go build -trimpath -buildvcs=false .
+go build -trimpath -buildvcs=false -o bin/lms-mcp ./cmd/lms-mcp
+# All checks plus offline CLI smoke tests (PowerShell 7):
+pwsh -File scripts/check.ps1
 ```
 
 Tests use synthetic fixtures; no real token or course data is required. CI tests Windows, Linux and macOS. Tagged releases produce amd64/arm64 archives and SHA-256 checksums. Build locally with `pwsh -File scripts/build-release.ps1`; choose a fresh output directory for each build.
 
-The Moodle preview also supports Moodle-only configurations (`courses: []` with `moodle.courses`). `sync`, `status`, and `whats-new` include both providers; use `moodle:COURSE_CODE` to filter Moodle changes. Moodle credentials and optional calendar URLs live in its separate private env file. The Ed `init` wizard is unchanged; start Moodle setup from `moodle.example.json`.
+The Moodle preview also supports Moodle-only configurations (`courses: []` with `moodle.courses`). `sync`, `status`, and `whats-new` include both providers; use `moodle:COURSE_CODE` to filter Moodle changes. Moodle credentials and optional calendar URLs live in its separate private env file. The Ed `init` wizard is unchanged; start Moodle setup from `examples/moodle.example.json`.
 
 MIT licensed. This is an independent project, not an official Ed product.

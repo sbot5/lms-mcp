@@ -2,6 +2,7 @@
 *.exe
 *.exe~
 /lms-mcp
+/bin/
 
 # secrets never live in this repo
 .env

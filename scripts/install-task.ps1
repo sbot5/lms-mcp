@@ -3,7 +3,7 @@
 param(
     [string]$EnvFile,
     [Parameter(Mandatory)][string]$Config,
-    [string]$Executable = (Join-Path (Split-Path -Parent $PSScriptRoot) 'lms-mcp.exe'),
+    [string]$Executable,
     [string]$TaskName,
     [string]$At,
     [switch]$Remove
@@ -21,6 +21,11 @@ if ($existing -and $existing.Description -ne $description) { throw "Task $TaskNa
 if ($Remove) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
     return
+}
+if (-not $Executable) {
+    $projectRoot = Split-Path -Parent $PSScriptRoot
+    $builtBinary = Join-Path $projectRoot 'bin/lms-mcp.exe'
+    $Executable = if (Test-Path -LiteralPath $builtBinary) { $builtBinary } else { Join-Path $projectRoot 'lms-mcp.exe' }
 }
 $Executable = (Resolve-Path -LiteralPath $Executable).ProviderPath
 $Config = (Resolve-Path -LiteralPath $Config).ProviderPath

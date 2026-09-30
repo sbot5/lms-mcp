@@ -11,21 +11,21 @@ The token file-download endpoint and browser-session endpoint are different; see
 
 ## Configure privately
 
-Copy `moodle.example.json` and `moodle.env.example` to a private folder outside the code repository. Rename the latter to `moodle.env`. Replace the example site, course ID and credentials. The course ID comes from the Moodle course URL (`course/view.php?id=...`). Keep credentials and token-bearing calendar URLs in the env file; JSON contains only its path and variable names.
+Copy `examples/moodle.example.json` and `examples/moodle.env.example` to a private folder outside the code repository. Rename the latter to `moodle.env`. Replace the example site, course ID and credentials. The course ID comes from the Moodle course URL (`course/view.php?id=...`). Keep credentials and token-bearing calendar URLs in the env file; JSON contains only its path and variable names.
 
 Set `moodle.base_url` to the Moodle installation URL, optionally including a subdirectory. HTTPS is required except for loopback test servers. Use **separate, non-overlapping output folders** for Ed and Moodle, such as `courses/COURSE101/ed` and `courses/COURSE101/moodle`. This prevents one provider from owning the other's checkpoint and files.
 
 ```sh
-go build -trimpath -buildvcs=false -o lms-mcp .
+go build -trimpath -buildvcs=false -o bin/lms-mcp ./cmd/lms-mcp
 lms-mcp config validate -config /private/moodle.json
 lms-mcp sync -config /private/moodle.json
 lms-mcp status -config /private/moodle.json
 lms-mcp whats-new -config /private/moodle.json -course moodle:COURSE101
 ```
 
-For Windows, build `lms-mcp.exe` and use `.\lms-mcp.exe`. `courses: []` is valid when `moodle.courses` is configured; a Moodle-only setup does not require an Ed token. Add the `moodle` object to an existing Ed config for a combined instance. Failures are reported per course and do not suppress healthy courses from the other provider.
+These commands assume the binary is on PATH. For source builds, use `./bin/lms-mcp`; on Windows, run `pwsh -File scripts/build.ps1` and use `.\bin\lms-mcp.exe`. `courses: []` is valid when `moodle.courses` is configured; a Moodle-only setup does not require an Ed token. Add the `moodle` object to an existing Ed config for a combined instance. Failures are reported per course and do not suppress healthy courses from the other provider.
 
-The Ed `init` wizard remains Ed-only. Set up Moodle with the example JSON in this preview. The same daily Windows task installer accepts Moodle-only configurations, but **do not enable it until the manual live checks below pass**. Neither this preview nor its tests change existing tasks.
+The Ed `init` wizard remains Ed-only. Set up Moodle with the example JSON in this preview. The same daily Windows task installer accepts Moodle-only configurations; complete the manual live checks below before using a scheduled Moodle instance. Offline tests do not install or change tasks.
 
 ## Optional calendar
 
