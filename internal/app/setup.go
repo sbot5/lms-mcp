@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bufio"
@@ -10,7 +10,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"time"
+
+	"github.com/sbot5/lms-mcp/internal/ed"
 )
 
 func initConfig(ctx context.Context, path, envFile, region string, in io.Reader, out io.Writer) error {
@@ -56,14 +57,14 @@ func initConfig(ctx context.Context, path, envFile, region string, in io.Reader,
 		}
 	}
 	c := newEdClient(token)
-	account, err := c.whoami(ctx)
+	account, err := c.Whoami(ctx)
 	if err != nil {
 		return err
 	}
 	return configureCourses(path, envFile, region, account.Courses, prompt, out)
 }
 
-func configureCourses(path, envFile, region string, courses []edCourse, prompt func(string, string) (string, error), out io.Writer) error {
+func configureCourses(path, envFile, region string, courses []ed.Course, prompt func(string, string) (string, error), out io.Writer) error {
 	if len(courses) == 0 {
 		return fmt.Errorf("no enrolled courses were returned")
 	}
@@ -172,32 +173,4 @@ func saveNewConfig(path string, cfg syncConfig) error {
 		return err
 	}
 	return closeErr
-}
-
-type courseStatus struct {
-	Course             string    `json:"course"`
-	Directory          string    `json:"directory"`
-	LastSuccess        time.Time `json:"last_success"`
-	Threads            int       `json:"cached_threads"`
-	Lessons            int       `json:"cached_lessons"`
-	DiscussionsEnabled bool      `json:"discussions_enabled"`
-	LessonsEnabled     bool      `json:"lessons_enabled"`
-	Error              string    `json:"error,omitempty"`
-}
-
-func syncStatus(cfg syncConfig) ([]courseStatus, error) {
-	r := []courseStatus{}
-	for _, co := range cfg.Courses {
-		s, err := readState(co)
-		v := courseStatus{Course: co.Code, Directory: co.Directory, DiscussionsEnabled: enabled(co.Discussions), LessonsEnabled: co.Lessons}
-		if err != nil {
-			v.Error = err.Error()
-		} else {
-			v.LastSuccess = s.LastSuccess
-			v.Threads = len(s.Threads)
-			v.Lessons = len(s.Lessons)
-		}
-		r = append(r, v)
-	}
-	return r, nil
 }

@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -8,13 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/signal"
 	"path/filepath"
 )
 
-const usage = `lms-mcp — configurable Ed synchronization and stdio MCP
+const usage = `lms-mcp — configurable Ed/Moodle synchronization and stdio MCP
 
-  init           interactive course configuration (requires an existing token file)
+  init           interactive Ed course configuration (requires an existing token file)
   config validate  validate settings without network access or credentials
   status         show local synchronization freshness without credentials
   whoami         list enrolled courses (account identity hidden by default)
@@ -33,16 +32,7 @@ Flags go before positional IDs:
 With -env-file but no -config, sync.json beside the env file is used for compatibility.
 `
 
-func main() {
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
-	defer stop()
-	if err := execute(ctx, os.Args[1:], os.Stdin, os.Stdout, os.Stderr); err != nil {
-		fmt.Fprintln(os.Stderr, "lms-mcp:", err)
-		os.Exit(1)
-	}
-}
-
-func execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
+func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
 	if len(args) == 0 || args[0] == "help" || args[0] == "--help" || args[0] == "-h" {
 		_, err := fmt.Fprint(out, usage)
 		return err
@@ -120,7 +110,7 @@ func execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	encode := func(v any) error { e := json.NewEncoder(out); e.SetIndent("", "  "); return e.Encode(v) }
 	switch cmd {
 	case "config":
-		return encode(map[string]any{"valid": true, "courses": len(cfg.Courses), "region": cfg.Region, "daily_at": cfg.Schedule.DailyAt})
+		return encode(map[string]any{"valid": true, "courses": len(allStorageCourses(cfg)), "region": cfg.Region, "daily_at": cfg.Schedule.DailyAt})
 	case "status":
 		r, err := syncStatus(cfg)
 		if err != nil {
@@ -137,17 +127,24 @@ func execute(ctx context.Context, args []string, in io.Reader, out, errOut io.Wr
 	if *envFile == "" {
 		*envFile = cfg.EnvFile
 	}
-	if *envFile == "" {
-		return fmt.Errorf("set env_file in your config or use -env-file")
+	var c *edClient
+	if len(cfg.Courses) > 0 || cmd == "whoami" || cmd == "thread" || cmd == "threads" {
+		if *envFile == "" {
+			err = fmt.Errorf("set env_file in your config or use -env-file")
+		} else {
+			var token string
+			token, err = loadToken(*envFile)
+			if err == nil {
+				c = newEdClient(token)
+				c.region = cfg.Region
+				c.includeIdentity = cfg.Privacy.IncludeIdentity
+				c.includePrivate = cfg.Privacy.IncludePrivatePosts
+			}
+		}
+		if err != nil && cmd != "sync" && cmd != "mcp" {
+			return err
+		}
 	}
-	token, err := loadToken(*envFile)
-	if err != nil {
-		return err
-	}
-	c := newEdClient(token)
-	c.region = cfg.Region
-	c.includeIdentity = cfg.Privacy.IncludeIdentity
-	c.includePrivate = cfg.Privacy.IncludePrivatePosts
 	switch cmd {
 	case "sync":
 		r, err := syncAll(ctx, c, cfg, *full)

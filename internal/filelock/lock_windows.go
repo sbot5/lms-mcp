@@ -1,11 +1,12 @@
-package main
+package filelock
 
 import (
-	"golang.org/x/sys/windows"
 	"os"
+
+	"golang.org/x/sys/windows"
 )
 
-func acquireLock(path string) (*os.File, error) {
+func Acquire(path string) (*os.File, error) {
 	p, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err

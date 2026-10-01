@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -9,6 +9,9 @@ import (
 	"os"
 	"slices"
 	"time"
+
+	"github.com/sbot5/lms-mcp/internal/ed"
+	"github.com/sbot5/lms-mcp/internal/render"
 )
 
 type courseResult struct {
@@ -17,13 +20,15 @@ type courseResult struct {
 	Lessons        int    `json:"lessons"`
 	Changes        int    `json:"changes"`
 	DetailsFetched int    `json:"details_fetched"`
+	Materials      int    `json:"materials,omitempty"`
+	Downloads      int    `json:"downloads,omitempty"`
 	Error          string `json:"error,omitempty"`
 }
 type syncResult struct {
 	Courses []courseResult `json:"courses"`
 }
 
-func threadFingerprint(t edThread) string { t.ViewCount = 0; return jsonHash(t) }
+func threadFingerprint(t ed.Thread) string { t.ViewCount = 0; return jsonHash(t) }
 func recordFingerprint(r record) string {
 	copy := record{}
 	for k, v := range r {
@@ -36,14 +41,14 @@ func recordFingerprint(r record) string {
 
 // Offset pagination has no snapshot cursor. Require two consecutive matching walks;
 // a busy course fails visibly and retries on the next run instead of claiming completeness.
-func stableThreads(ctx context.Context, c *edClient, id int) ([]edThread, error) {
+func stableThreads(ctx context.Context, c *edClient, id int) ([]ed.Thread, error) {
 	var last string
 	for attempt := 0; attempt < 3; attempt++ {
-		ts, err := c.threads(ctx, id)
+		ts, err := c.Threads(ctx, id)
 		if err != nil {
 			return nil, err
 		}
-		slices.SortFunc(ts, func(a, b edThread) int { return a.ID - b.ID })
+		slices.SortFunc(ts, func(a, b ed.Thread) int { return a.ID - b.ID })
 		keys := make([]string, 0, len(ts))
 		for _, t := range ts {
 			if t.ID <= 0 || t.CourseID != id {
@@ -62,6 +67,9 @@ func stableThreads(ctx context.Context, c *edClient, id int) ([]edThread, error)
 
 func syncCourse(ctx context.Context, c *edClient, cfg syncConfig, co courseConfig, force bool) (courseResult, error) {
 	result := courseResult{Course: co.Code}
+	if c == nil {
+		return result, fmt.Errorf("Ed credentials unavailable; check env_file and ED_API_TOKEN")
+	}
 	lock, err := lockCourse(co)
 	if err != nil {
 		return result, fmt.Errorf("course already syncing or lock unavailable: %w", err)
@@ -93,7 +101,7 @@ func syncCourse(ctx context.Context, c *edClient, cfg syncConfig, co courseConfi
 				Code, Name, Region string
 			}{threadFingerprint(t), co.IncludePrivate, co.Code, co.Name, co.region()})
 			if force || !exists || old.Fingerprint != fingerprint || now.Sub(old.CheckedAt) >= time.Duration(cfg.FullRefreshHours)*time.Hour {
-				detail, users, err := c.thread(ctx, t.ID)
+				detail, users, err := c.Thread(ctx, t.ID)
 				if err != nil {
 					return result, err
 				}
@@ -175,18 +183,38 @@ func syncAll(ctx context.Context, c *edClient, cfg syncConfig, force bool) (sync
 		r.Courses = append(r.Courses, x)
 		fmt.Fprintf(os.Stderr, "%s: threads=%d lessons=%d changes=%d error=%s\n", co.Code, x.Threads, x.Lessons, x.Changes, x.Error)
 	}
+	if cfg.Moodle != nil {
+		mc, authErr := newMoodleClient(*cfg.Moodle)
+		for _, co := range cfg.Moodle.Courses {
+			if ctx.Err() != nil {
+				errs = append(errs, ctx.Err())
+				break
+			}
+			v := courseResult{Course: "moodle:" + co.Code}
+			err := authErr
+			if err == nil {
+				v, err = syncMoodleCourse(ctx, mc, *cfg.Moodle, co, force)
+			}
+			if err != nil {
+				v.Error = err.Error()
+				errs = append(errs, fmt.Errorf("%s: %w", v.Course, err))
+			}
+			r.Courses = append(r.Courses, v)
+			fmt.Fprintf(os.Stderr, "%s: materials=%d changes=%d error=%s\n", v.Course, v.Materials, v.Changes, v.Error)
+		}
+	}
 	return r, errors.Join(errs...)
 }
 
 func updatesMarkdown(co courseConfig, changes []change) string {
 	var b bytes.Buffer
-	fmt.Fprintf(&b, "# %s — Ed updates\n\nTimes are detection times (UTC). First sync creates a baseline.\nUnavailable means deleted, hidden, or no longer visible; old lesson files are retained.\n\n", co.Code)
+	fmt.Fprintf(&b, "# %s — Updates\n\nTimes are detection times (UTC). First sync creates a baseline.\nUnavailable means deleted, hidden, or no longer visible; previous material files are retained.\n\n", co.Code)
 	for i := len(changes) - 1; i >= 0; i-- {
 		e := changes[i]
 		if e.Private && !co.IncludePrivate {
 			continue
 		}
-		fmt.Fprintf(&b, "- %s · %s %s · #%d [%s](%s)\n", e.DetectedAt.Format(time.RFC3339), e.Kind, e.Action, e.Number, mdEscape(e.Title), e.URL)
+		fmt.Fprintf(&b, "- %s · %s %s · #%d [%s](%s)\n", e.DetectedAt.Format(time.RFC3339), e.Kind, e.Action, e.Number, render.Escape(e.Title), e.URL)
 	}
 	return b.String()
 }
@@ -219,7 +247,7 @@ func whatsNew(cfg syncConfig, in newsInput) (newsResult, error) {
 		return r, fmt.Errorf("limit must be 1..1000")
 	}
 	found := false
-	for _, co := range cfg.Courses {
+	for _, co := range allStorageCourses(cfg) {
 		if in.Course != "" && in.Course != co.Code {
 			continue
 		}

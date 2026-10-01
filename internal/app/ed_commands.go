@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -9,10 +9,13 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+
+	"github.com/sbot5/lms-mcp/internal/ed"
+	"github.com/sbot5/lms-mcp/internal/render"
 )
 
 func runWhoami(ctx context.Context, c *edClient, _ []string) error {
-	res, err := c.whoami(ctx)
+	res, err := c.Whoami(ctx)
 	if err != nil {
 		return err
 	}
@@ -34,12 +37,12 @@ func runThreads(ctx context.Context, c *edClient, args []string) error {
 	if err != nil {
 		return fmt.Errorf("course id must be a number, got %q", args[0])
 	}
-	threads, err := c.threads(ctx, courseID)
+	threads, err := c.Threads(ctx, courseID)
 	if err != nil {
 		return err
 	}
 	if !c.includePrivate {
-		threads = slices.DeleteFunc(threads, func(t edThread) bool { return t.IsPrivate })
+		threads = slices.DeleteFunc(threads, func(t ed.Thread) bool { return t.IsPrivate })
 	}
 	if len(threads) == 0 {
 		fmt.Println("no threads")
@@ -71,11 +74,11 @@ func runThread(ctx context.Context, c *edClient, args []string) error {
 	if err != nil {
 		return fmt.Errorf("thread id must be a number, got %q", args[0])
 	}
-	t, users, err := c.thread(ctx, id)
+	t, users, err := c.Thread(ctx, id)
 	if err != nil {
 		return err
 	}
-	_, text, err := renderBody(t.Content, t.Document, nil)
+	_, text, err := render.Body(t.Content, t.Document, nil)
 	if err != nil {
 		return err
 	}
@@ -97,13 +100,13 @@ func runThread(ctx context.Context, c *edClient, args []string) error {
 
 	n := 0
 	var renderErr error
-	var walk func(replies []edReply, depth int)
-	walk = func(replies []edReply, depth int) {
+	var walk func(replies []ed.Reply, depth int)
+	walk = func(replies []ed.Reply, depth int) {
 		for _, r := range replies {
 			if r.DeletedAt != "" || (r.IsPrivate && !c.includePrivate) {
 				continue
 			}
-			_, body, err := renderBody(r.Content, r.Document, nil)
+			_, body, err := render.Body(r.Content, r.Document, nil)
 			if err != nil {
 				renderErr = err
 				return
@@ -138,7 +141,7 @@ func runThread(ctx context.Context, c *edClient, args []string) error {
 }
 
 // author labels who wrote a post. Staff are named; classmates are not, so their names stay out of anything printed.
-func author(users map[int]edUser, id int) string {
+func author(users map[int]ed.User, id int) string {
 	u, ok := users[id]
 	switch {
 	case !ok:

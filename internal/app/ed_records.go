@@ -1,13 +1,16 @@
-package main
+package app
 
 import (
 	"fmt"
 	"strings"
+
+	"github.com/sbot5/lms-mcp/internal/ed"
+	"github.com/sbot5/lms-mcp/internal/render"
 )
 
 type record map[string]any
 
-func roleOf(users map[int]edUser, id int, anonymous bool) string {
+func roleOf(users map[int]ed.User, id int, anonymous bool) string {
 	if anonymous {
 		return "anonymous"
 	}
@@ -19,20 +22,20 @@ func roleOf(users map[int]edUser, id int, anonymous bool) string {
 }
 func isStaff(role string) bool { return role == "admin" || role == "mentor" }
 
-func threadRecord(t edThreadDetail, users map[int]edUser, co courseConfig) (record, error) {
-	md, txt, err := renderBody(t.Content, t.Document, nil)
+func threadRecord(t ed.ThreadDetail, users map[int]ed.User, co courseConfig) (record, error) {
+	md, txt, err := render.Body(t.Content, t.Document, nil)
 	if err != nil {
 		return nil, err
 	}
 	role := roleOf(users, t.UserID, t.IsAnonymous)
 	replies := []record{}
-	var walk func([]edReply, int) error
-	walk = func(rs []edReply, depth int) error {
+	var walk func([]ed.Reply, int) error
+	walk = func(rs []ed.Reply, depth int) error {
 		for _, r := range rs {
 			if r.DeletedAt != "" || (r.IsPrivate && !co.IncludePrivate) {
 				continue
 			}
-			md, txt, err := renderBody(r.Content, r.Document, nil)
+			md, txt, err := render.Body(r.Content, r.Document, nil)
 			if err != nil {
 				return err
 			}
@@ -61,7 +64,7 @@ func discussionMarkdown(co courseConfig, records []record) string {
 		if r["is_pinned"] == true {
 			badge = " [pinned]"
 		}
-		fmt.Fprintf(&b, "- #%v%s [%s](%v) — %v replies · %v\n", r["number"], badge, mdEscape(fmt.Sprint(r["title"])), r["url"], r["reply_count"], r["author_role"])
+		fmt.Fprintf(&b, "- #%v%s [%s](%v) — %v replies · %v\n", r["number"], badge, render.Escape(fmt.Sprint(r["title"])), r["url"], r["reply_count"], r["author_role"])
 	}
 	return b.String()
 }

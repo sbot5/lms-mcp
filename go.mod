@@ -3,8 +3,10 @@ module github.com/sbot5/lms-mcp
 go 1.25.0
 
 require (
+	github.com/arran4/golang-ical v0.3.6
 	github.com/modelcontextprotocol/go-sdk v1.8.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/net v0.57.0
+	golang.org/x/sys v0.47.0
 )
 
 require (

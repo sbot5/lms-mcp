@@ -1,4 +1,4 @@
-package main
+package render
 
 import (
 	"encoding/xml"
@@ -14,6 +14,35 @@ type xmlNode struct {
 	tag, text string
 	attrs     map[string]string
 	children  []*xmlNode
+}
+
+// AssetURLs extracts references; callers decide which hosts are permitted.
+func AssetURLs(content string) (map[string]string, error) {
+	n, err := parseEdXML(content)
+	if err != nil {
+		return nil, err
+	}
+	refs := map[string]string{}
+	var walk func(*xmlNode)
+	walk = func(n *xmlNode) {
+		if n.tag == "image" || n.tag == "file" {
+			u := n.attrs["url"]
+			if u == "" {
+				u = n.attrs["src"]
+			}
+			if u == "" {
+				u = n.attrs["href"]
+			}
+			if u != "" {
+				refs[u] = n.attrs["filename"]
+			}
+		}
+		for _, child := range n.children {
+			walk(child)
+		}
+	}
+	walk(n)
+	return refs, nil
 }
 
 func parseEdXML(src string) (*xmlNode, error) {
@@ -58,11 +87,11 @@ func plain(n *xmlNode) string {
 	return s
 }
 
-func mdEscape(s string) string {
+func Escape(s string) string {
 	r := strings.NewReplacer("\\", "\\\\", "`", "\\`", "*", "\\*", "_", "\\_", "[", "\\[", "]", "\\]", "<", "&lt;", ">", "&gt;")
 	return r.Replace(s)
 }
-func mdURL(s string) string {
+func URL(s string) string {
 	return "<" + strings.NewReplacer("<", "%3C", ">", "%3E", "\n", "%0A", "\r", "%0D", " ", "%20").Replace(s) + ">"
 }
 func fence(s, lang string) string {
@@ -77,7 +106,7 @@ func fence(s, lang string) string {
 func renderNode(n *xmlNode, assets map[string]string) string {
 	if n.tag == "" {
 		if n.text != "" {
-			return mdEscape(n.text)
+			return Escape(n.text)
 		}
 	}
 	inner := func() string {
@@ -122,9 +151,9 @@ func renderNode(n *xmlNode, assets map[string]string) string {
 	case "math":
 		return "$" + plain(n) + "$"
 	case "link":
-		return "[" + strings.TrimSpace(inner()) + "](" + mdURL(link(n.attrs["href"])) + ")"
+		return "[" + strings.TrimSpace(inner()) + "](" + URL(link(n.attrs["href"])) + ")"
 	case "image":
-		return "![" + mdEscape(n.attrs["alt"]) + "](" + mdURL(link(n.attrs["src"])) + ")"
+		return "![" + Escape(n.attrs["alt"]) + "](" + URL(link(n.attrs["src"])) + ")"
 	case "file":
 		u := n.attrs["url"]
 		if u == "" {
@@ -140,9 +169,9 @@ func renderNode(n *xmlNode, assets map[string]string) string {
 		if title == "" {
 			title = "Attachment"
 		}
-		return "\n\n[" + mdEscape(title) + "](" + mdURL(link(u)) + ")\n\n"
+		return "\n\n[" + Escape(title) + "](" + URL(link(u)) + ")\n\n"
 	case "video":
-		return "\n\n[Video](" + mdURL(n.attrs["src"]) + ")\n\n"
+		return "\n\n[Video](" + URL(n.attrs["src"]) + ")\n\n"
 	case "snippet":
 		var parts []string
 		for _, child := range n.children {
@@ -222,7 +251,7 @@ func renderNode(n *xmlNode, assets map[string]string) string {
 
 var mentionPattern = regexp.MustCompile(`(?s)<mention\b[^>]*>(.*?)</mention>`)
 
-func renderBody(content, document string, assets map[string]string) (string, string, error) {
+func Body(content, document string, assets map[string]string) (string, string, error) {
 	for _, m := range mentionPattern.FindAllStringSubmatch(content, -1) {
 		name := strings.TrimSpace(html.UnescapeString(m[1]))
 		if name != "" {

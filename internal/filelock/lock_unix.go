@@ -1,13 +1,14 @@
 //go:build !windows
 
-package main
+package filelock
 
 import (
-	"golang.org/x/sys/unix"
 	"os"
+
+	"golang.org/x/sys/unix"
 )
 
-func acquireLock(path string) (*os.File, error) {
+func Acquire(path string) (*os.File, error) {
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return nil, err

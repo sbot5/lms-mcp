@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -12,6 +12,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/sbot5/lms-mcp/internal/filelock"
 )
 
 func digest(data []byte) string { h := sha256.Sum256(data); return hex.EncodeToString(h[:]) }
@@ -63,14 +65,16 @@ type change struct {
 	Private    bool      `json:"private,omitempty"`
 }
 type syncState struct {
-	Version     int                 `json:"version"`
-	CourseID    int                 `json:"course_id"`
-	Region      string              `json:"region,omitempty"`
-	LastSuccess time.Time           `json:"last_success"`
-	Threads     map[int]threadCache `json:"threads"`
-	Lessons     map[int]lessonCache `json:"lessons"`
-	Files       map[string]string   `json:"files"`
-	Changes     []change            `json:"changes"`
+	Version      int                        `json:"version"`
+	CourseID     int                        `json:"course_id"`
+	Region       string                     `json:"region,omitempty"`
+	LastSuccess  time.Time                  `json:"last_success"`
+	Threads      map[int]threadCache        `json:"threads"`
+	Lessons      map[int]lessonCache        `json:"lessons"`
+	Files        map[string]string          `json:"files"`
+	Changes      []change                   `json:"changes"`
+	MoodleFiles  map[string]moodleFileState `json:"moodle_files,omitempty"`
+	CalendarHash string                     `json:"calendar_hash,omitempty"`
 }
 
 func readState(co courseConfig) (syncState, error) {
@@ -107,7 +111,7 @@ func lockCourse(co courseConfig) (*os.File, error) {
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return nil, err
 	}
-	return acquireLock(filepath.Join(dir, "sync.lock"))
+	return filelock.Acquire(filepath.Join(dir, "sync.lock"))
 }
 
 func safeTarget(root, rel string) (string, error) {

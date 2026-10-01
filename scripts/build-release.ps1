@@ -18,9 +18,13 @@ try {
         $stage = Join-Path $OutputDirectory $platform
         New-Item -ItemType Directory -Path $stage | Out-Null
         $binary = if ($env:GOOS -eq 'windows') { 'lms-mcp.exe' } else { 'lms-mcp' }
-        & go build -trimpath -buildvcs=false '-ldflags=-s -w' -o (Join-Path $stage $binary) .
+        & go build -trimpath -buildvcs=false '-ldflags=-s -w' -o (Join-Path $stage $binary) ./cmd/lms-mcp
         if ($LASTEXITCODE -ne 0) { throw "Build failed for $platform" }
-        foreach ($name in @('README.md','LICENSE','sync.example.json','.env.example')) { Copy-Item -LiteralPath (Join-Path $root $name) -Destination $stage }
+        foreach ($name in @('README.md','LICENSE','SECURITY.md','CONTRIBUTING.md')) { Copy-Item -LiteralPath (Join-Path $root $name) -Destination $stage }
+        New-Item -ItemType Directory -Path (Join-Path $stage 'examples') | Out-Null
+        foreach ($name in @('sync.example.json','.env.example','moodle.example.json','moodle.env.example')) { Copy-Item -LiteralPath (Join-Path $root "examples/$name") -Destination (Join-Path $stage 'examples') }
+        New-Item -ItemType Directory -Path (Join-Path $stage 'docs') | Out-Null
+        foreach ($name in @('moodle.md','architecture.md')) { Copy-Item -LiteralPath (Join-Path $root "docs/$name") -Destination (Join-Path $stage 'docs') }
         New-Item -ItemType Directory -Path (Join-Path $stage 'scripts') | Out-Null
         foreach ($name in @('install-task.ps1','run-sync.ps1')) { Copy-Item -LiteralPath (Join-Path $PSScriptRoot $name) -Destination (Join-Path $stage 'scripts') }
         if ($env:GOOS -eq 'windows') {

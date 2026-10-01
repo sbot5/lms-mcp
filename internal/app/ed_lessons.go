@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -11,6 +11,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/sbot5/lms-mcp/internal/render"
 )
 
 type edModule struct {
@@ -105,32 +107,17 @@ func downloadAsset(ctx context.Context, raw string) ([]byte, error) {
 }
 
 func collectAssets(content string, refs map[string]string) error {
-	n, err := parseEdXML(content)
+	found, err := render.AssetURLs(content)
 	if err != nil {
 		return err
 	}
-	var walk func(*xmlNode)
-	walk = func(n *xmlNode) {
-		if n.tag == "image" || n.tag == "file" {
-			u := n.attrs["url"]
-			if u == "" {
-				u = n.attrs["src"]
-			}
-			if u == "" {
-				u = n.attrs["href"]
-			}
-			if allowedAsset(u) {
-				refs[u] = n.attrs["filename"]
-			}
-		}
-		for _, c := range n.children {
-			walk(c)
+	for raw, name := range found {
+		if allowedAsset(raw) {
+			refs[raw] = name
 		}
 	}
-	walk(n)
 	return nil
 }
-
 func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState, files map[string][]byte, now time.Time, refreshAssets bool) (int, error) {
 	pending, err := readPending(co)
 	if err != nil {
@@ -140,7 +127,7 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 		Lessons []edLesson `json:"lessons"`
 		Modules []edModule `json:"modules"`
 	}
-	if err := c.get(ctx, fmt.Sprintf("/courses/%d/lessons", co.ID), &list); err != nil {
+	if err := c.Get(ctx, fmt.Sprintf("/courses/%d/lessons", co.ID), &list); err != nil {
 		return 0, err
 	}
 	if list.Lessons == nil || list.Modules == nil {
@@ -170,7 +157,7 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 		var res struct {
 			Lesson edLesson `json:"lesson"`
 		}
-		if err := c.get(ctx, fmt.Sprintf("/lessons/%d", meta.ID), &res); err != nil {
+		if err := c.Get(ctx, fmt.Sprintf("/lessons/%d", meta.ID), &res); err != nil {
 			return 0, err
 		}
 		l := res.Lesson
@@ -199,7 +186,7 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 						Content string `json:"content"`
 					} `json:"challenge"`
 				}
-				if err := c.get(ctx, fmt.Sprintf("/challenges/%d", slide.ChallengeID), &r); err != nil {
+				if err := c.Get(ctx, fmt.Sprintf("/challenges/%d", slide.ChallengeID), &r); err != nil {
 					return 0, err
 				}
 				challenges[slide.ID] = r.Challenge.Content
@@ -211,7 +198,7 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 				var r struct {
 					Questions []edQuestion `json:"questions"`
 				}
-				if err := c.get(ctx, fmt.Sprintf("/lessons/slides/%d/questions", slide.ID), &r); err != nil {
+				if err := c.Get(ctx, fmt.Sprintf("/lessons/slides/%d/questions", slide.ID), &r); err != nil {
 					return 0, err
 				}
 				questions[slide.ID] = r.Questions
@@ -276,7 +263,7 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 			}
 			fmt.Fprintf(&body, "\n## %s\n\n", slide.Title)
 			writeXML := func(src string) error {
-				md, _, err := renderBody(src, "", assets)
+				md, _, err := render.Body(src, "", assets)
 				if err == nil {
 					body.WriteString(md + "\n\n")
 				}
@@ -291,11 +278,11 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 				if local, ok := assets[target]; ok {
 					target = "../_assets/" + local
 				}
-				fmt.Fprintf(&body, "[PDF](%s)\n", mdURL(target))
+				fmt.Fprintf(&body, "[PDF](%s)\n", render.URL(target))
 			case "video":
-				fmt.Fprintf(&body, "[Video](%s)\n", mdURL(slide.VideoURL))
+				fmt.Fprintf(&body, "[Video](%s)\n", render.URL(slide.VideoURL))
 			case "webpage":
-				fmt.Fprintf(&body, "[Webpage](%s)\n", mdURL(slide.URL))
+				fmt.Fprintf(&body, "[Webpage](%s)\n", render.URL(slide.URL))
 			case "code":
 				if err := writeXML(challenges[slide.ID]); err != nil {
 					return 0, err
@@ -318,7 +305,7 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 				}
 			default:
 				if slide.Type != "document" {
-					fmt.Fprintf(&body, "[Open %s slide in Ed](%s/slides/%d)\n", mdEscape(slide.Type), url, slide.ID)
+					fmt.Fprintf(&body, "[Open %s slide in Ed](%s/slides/%d)\n", render.Escape(slide.Type), url, slide.ID)
 				}
 			}
 		}
@@ -339,7 +326,7 @@ func syncLessons(ctx context.Context, c *edClient, co courseConfig, s *syncState
 			s.Changes = append(s.Changes, change{DetectedAt: now, Course: co.Code, Kind: "lesson", Action: action, ID: l.ID, Title: l.Title, URL: url, Staff: true})
 			updates++
 		}
-		fmt.Fprintf(&idx, "- [%s](%s)\n", mdEscape(l.Title), mdURL(filepath.ToSlash(strings.TrimPrefix(rel, "ed-lessons"+string(filepath.Separator)))))
+		fmt.Fprintf(&idx, "- [%s](%s)\n", render.Escape(l.Title), render.URL(filepath.ToSlash(strings.TrimPrefix(rel, "ed-lessons"+string(filepath.Separator)))))
 	}
 	for id, old := range s.Lessons {
 		if _, ok := next[id]; !ok {

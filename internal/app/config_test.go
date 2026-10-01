@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"bytes"
@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sbot5/lms-mcp/internal/ed"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -36,7 +38,7 @@ func TestConfigurationDefaultsValidationAndOfflineCommands(t *testing.T) {
 	}
 	for _, cmd := range [][]string{{"config", "validate", "-config", path}, {"status", "-config", path}, {"whats-new", "-config", path}} {
 		var out bytes.Buffer
-		if err := execute(context.Background(), cmd, strings.NewReader(""), &out, io.Discard); err != nil {
+		if err := Run(context.Background(), cmd, strings.NewReader(""), &out, io.Discard); err != nil {
 			t.Fatal(err)
 		}
 		if out.Len() == 0 {
@@ -62,7 +64,7 @@ func TestWizardSelectsCoursesWithoutOverwriting(t *testing.T) {
 		}
 		return a, nil
 	}
-	courses := []edCourse{{ID: 1, Code: "ONE"}, {ID: 2, Code: "TWO"}}
+	courses := []ed.Course{{ID: 1, Code: "ONE"}, {ID: 2, Code: "TWO"}}
 	if err := configureCourses(path, "/private/.env", "us", courses, prompt, io.Discard); err != nil {
 		t.Fatal(err)
 	}
@@ -87,9 +89,9 @@ func TestPrivatePostsDoNotReachCLIOrUpdatePage(t *testing.T) {
 	detail.Title = "DO_NOT_EXPORT"
 	c := mockClient(t, func(r *http.Request) (int, any) {
 		if strings.Contains(r.URL.Path, "/courses/") {
-			ts := []edThread{}
+			ts := []ed.Thread{}
 			if r.URL.Query().Get("offset") == "0" {
-				ts = append(ts, detail.edThread)
+				ts = append(ts, detail.Thread)
 			}
 			return 200, map[string]any{"threads": ts}
 		}
@@ -186,7 +188,7 @@ func TestMCPDiscoveryIdentityAndPrivateThreadBoundary(t *testing.T) {
 	}
 	defer cs.Close()
 	list, err := cs.ListTools(ctx, nil)
-	if err != nil || len(list.Tools) != 4 {
+	if err != nil || len(list.Tools) != 5 {
 		t.Fatalf("tools: %v %v", list, err)
 	}
 	identity, err := cs.CallTool(ctx, &mcp.CallToolParams{Name: "ed_whoami", Arguments: map[string]any{}})

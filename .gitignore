@@ -2,10 +2,12 @@
 *.exe
 *.exe~
 /lms-mcp
+/bin/
 
 # secrets never live in this repo
 .env
 .env.*
+*.env
 !.env.example
 config.json
 sync.json

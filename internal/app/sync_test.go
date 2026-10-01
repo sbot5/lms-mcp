@@ -1,4 +1,4 @@
-package main
+package app
 
 import (
 	"context"
@@ -11,6 +11,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sbot5/lms-mcp/internal/ed"
+	"github.com/sbot5/lms-mcp/internal/render"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -19,21 +22,21 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 func mockClient(t *testing.T, handler func(*http.Request) (int, any)) *edClient {
 	t.Helper()
 	c := newEdClient("test-secret")
-	c.hc.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+	c.Client = ed.NewClient("test-secret", roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.Header.Get("Authorization") != "Bearer test-secret" {
 			t.Error("missing auth")
 		}
 		status, v := handler(r)
 		b, _ := json.Marshal(v)
 		return &http.Response{StatusCode: status, Status: fmt.Sprint(status), Header: http.Header{}, Body: io.NopCloser(strings.NewReader(string(b))), Request: r}, nil
-	})
+	}))
 	return c
 }
 func testCourse(t *testing.T) courseConfig {
 	return courseConfig{ID: 1, Code: "TEST", Name: "Test course", Directory: t.TempDir()}
 }
-func testDetail() edThreadDetail {
-	return edThreadDetail{edThread: edThread{ID: 10, CourseID: 1, Number: 7, UserID: 9, Title: "Announcement", Content: "<document><paragraph>Hello</paragraph></document>", Document: "Hello", UpdatedAt: "2026-09-28T00:00:00Z", IsPinned: true}}
+func testDetail() ed.ThreadDetail {
+	return ed.ThreadDetail{Thread: ed.Thread{ID: 10, CourseID: 1, Number: 7, UserID: 9, Title: "Announcement", Content: "<document><paragraph>Hello</paragraph></document>", Document: "Hello", UpdatedAt: "2026-09-28T00:00:00Z", IsPinned: true}}
 }
 
 func TestSyncIdempotentReplyCountAndFullRefresh(t *testing.T) {
@@ -43,14 +46,14 @@ func TestSyncIdempotentReplyCountAndFullRefresh(t *testing.T) {
 	calls := 0
 	c := mockClient(t, func(r *http.Request) (int, any) {
 		if strings.Contains(r.URL.Path, "/courses/") {
-			ts := []edThread{}
+			ts := []ed.Thread{}
 			if r.URL.Query().Get("offset") == "0" {
-				ts = append(ts, detail.edThread)
+				ts = append(ts, detail.Thread)
 			}
 			return 200, map[string]any{"threads": ts}
 		}
 		calls++
-		return 200, map[string]any{"thread": detail, "users": []edUser{{ID: 9, CourseRole: "student"}, {ID: 12, CourseRole: "admin"}}}
+		return 200, map[string]any{"thread": detail, "users": []ed.User{{ID: 9, CourseRole: "student"}, {ID: 12, CourseRole: "admin"}}}
 	})
 	first, err := syncCourse(context.Background(), c, cfg, co, false)
 	if err != nil {
@@ -83,7 +86,7 @@ func TestSyncIdempotentReplyCountAndFullRefresh(t *testing.T) {
 	}
 	// A reply can change while the parent updated_at stays unchanged.
 	detail.ReplyCount = 1
-	detail.Answers = []edReply{{ID: 20, UserID: 12, Type: "answer", Content: "<paragraph>Staff reply</paragraph>", Document: "Staff reply"}}
+	detail.Answers = []ed.Reply{{ID: 20, UserID: 12, Type: "answer", Content: "<paragraph>Staff reply</paragraph>", Document: "Staff reply"}}
 	third, err := syncCourse(context.Background(), c, cfg, co, false)
 	if err != nil || third.Changes != 1 {
 		t.Fatalf("reply count not detected: %+v %v", third, err)
@@ -106,9 +109,9 @@ func TestFailedDetailDoesNotAdvanceState(t *testing.T) {
 	fail := false
 	c := mockClient(t, func(r *http.Request) (int, any) {
 		if strings.Contains(r.URL.Path, "/courses/") {
-			ts := []edThread{}
+			ts := []ed.Thread{}
 			if r.URL.Query().Get("offset") == "0" {
-				ts = append(ts, detail.edThread)
+				ts = append(ts, detail.Thread)
 			}
 			return 200, map[string]any{"threads": ts}
 		}
@@ -146,13 +149,13 @@ func TestPaginationShortPagesAndDuplicates(t *testing.T) {
 		case "2":
 			ids = []int{2, 3}
 		}
-		ts := []edThread{}
+		ts := []ed.Thread{}
 		for _, id := range ids {
-			ts = append(ts, edThread{ID: id, CourseID: 1})
+			ts = append(ts, ed.Thread{ID: id, CourseID: 1})
 		}
 		return 200, map[string]any{"threads": ts}
 	})
-	ts, err := c.threads(context.Background(), 1)
+	ts, err := c.Threads(context.Background(), 1)
 	if err != nil || len(ts) != 3 || strings.Join(offsets, ",") != "0,2,4" {
 		t.Fatalf("%v %v %v", ts, offsets, err)
 	}
@@ -213,7 +216,7 @@ func TestCourseLockReleasedOnClose(t *testing.T) {
 
 func TestXMLPrivacyAttachmentsAndCode(t *testing.T) {
 	src := `<document><paragraph>Hello <mention id="9">Jane &amp; Doe</mention></paragraph><file url="https://static.edusercontent.com/report.pdf" filename="Report.pdf"/><snippet language="go"><snippet-file>one</snippet-file><snippet-file>two</snippet-file></snippet><table><table-row><table-cell>A</table-cell><table-cell>B</table-cell></table-row><table-row><table-cell>C</table-cell><table-cell>D</table-cell></table-row></table></document>`
-	md, txt, err := renderBody(src, "Hello Jane & Doe", nil)
+	md, txt, err := render.Body(src, "Hello Jane & Doe", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -229,7 +232,7 @@ func TestXMLPrivacyAttachmentsAndCode(t *testing.T) {
 	if err = collectAssets(src, refs); err != nil || len(refs) != 1 {
 		t.Fatalf("file not collected %v %v", refs, err)
 	}
-	if _, _, err = renderBody("<bad>", "", nil); err == nil {
+	if _, _, err = render.Body("<bad>", "", nil); err == nil {
 		t.Fatal("malformed XML accepted")
 	}
 	for _, raw := range []string{"http://static.edusercontent.com/a", "https://evil-edusercontent.com/a", "https://edusercontent.com.evil/a", "https://edusercontent.com:444/a", "https://localhost/a"} {

@@ -1,4 +1,4 @@
-package main
+package ed
 
 import (
 	"cmp"
@@ -14,22 +14,19 @@ import (
 
 const edBaseURL = "https://edstem.org/api"
 
-type edClient struct {
-	token           string
-	hc              *http.Client
-	mu              sync.Mutex
-	lastRequest     time.Time
-	region          string
-	includeIdentity bool
-	includePrivate  bool
+type Client struct {
+	token       string
+	hc          *http.Client
+	mu          sync.Mutex
+	lastRequest time.Time
 }
 
-func newEdClient(token string) *edClient {
-	return &edClient{token: token, hc: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+func NewClient(token string, transport http.RoundTripper) *Client {
+	return &Client{token: token, hc: &http.Client{Timeout: 30 * time.Second, Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
 // get requests edBaseURL+path and decodes the JSON response into out, which must be a pointer.
-func (c *edClient) get(ctx context.Context, path string, out any) error {
+func (c *Client) Get(ctx context.Context, path string, out any) error {
 	for attempt := 0; attempt < 4; attempt++ {
 		err := c.getOnce(ctx, path, out)
 		if err == nil {
@@ -68,7 +65,7 @@ func (e *edHTTPError) Error() string {
 	return fmt.Sprintf("GET %s: HTTP %d %s", e.path, e.status, http.StatusText(e.status))
 }
 
-func (c *edClient) getOnce(ctx context.Context, path string, out any) error {
+func (c *Client) getOnce(ctx context.Context, path string, out any) error {
 	c.mu.Lock()
 	delay := time.Until(c.lastRequest.Add(100 * time.Millisecond))
 	if delay > 0 {
@@ -106,7 +103,7 @@ func (c *edClient) getOnce(ctx context.Context, path string, out any) error {
 	return nil
 }
 
-type edCourse struct {
+type Course struct {
 	ID      int    `json:"id"`
 	Code    string `json:"code"`
 	Name    string `json:"name"`
@@ -115,38 +112,38 @@ type edCourse struct {
 	Role    string `json:"role" jsonschema:"the user's role in this course, e.g. student"`
 }
 
-type whoamiResult struct {
-	UserID  int        `json:"user_id,omitempty"`
-	Name    string     `json:"name,omitempty"`
-	Courses []edCourse `json:"courses"`
+type WhoamiResult struct {
+	UserID  int      `json:"user_id,omitempty"`
+	Name    string   `json:"name,omitempty"`
+	Courses []Course `json:"courses"`
 }
 
 // whoami returns the signed-in user and every course they are enrolled in.
-func (c *edClient) whoami(ctx context.Context) (whoamiResult, error) {
+func (c *Client) Whoami(ctx context.Context) (WhoamiResult, error) {
 	var resp struct {
 		User struct {
 			ID   int    `json:"id"`
 			Name string `json:"name"`
 		} `json:"user"`
 		Courses []struct {
-			Course edCourse `json:"course"`
+			Course Course `json:"course"`
 			Role   struct {
 				Role string `json:"role"`
 			} `json:"role"`
 		} `json:"courses"`
 	}
-	if err := c.get(ctx, "/user", &resp); err != nil {
-		return whoamiResult{}, err
+	if err := c.Get(ctx, "/user", &resp); err != nil {
+		return WhoamiResult{}, err
 	}
 
-	res := whoamiResult{UserID: resp.User.ID, Name: resp.User.Name, Courses: make([]edCourse, 0, len(resp.Courses))}
+	res := WhoamiResult{UserID: resp.User.ID, Name: resp.User.Name, Courses: make([]Course, 0, len(resp.Courses))}
 	for _, e := range resp.Courses {
 		co := e.Course
 		co.Role = e.Role.Role // Ed sends the role next to the course object, not inside it
 		res.Courses = append(res.Courses, co)
 	}
 	// Ed returns courses in no stable order: newest semester first, then by code.
-	slices.SortFunc(res.Courses, func(a, b edCourse) int {
+	slices.SortFunc(res.Courses, func(a, b Course) int {
 		return cmp.Or(
 			cmp.Compare(b.Year, a.Year),
 			cmp.Compare(b.Session, a.Session),
@@ -160,8 +157,8 @@ func (c *edClient) whoami(ctx context.Context) (whoamiResult, error) {
 // so a short page does not prove the list has ended.
 const threadPageSize = 100
 
-// edThread is a thread as the list endpoint returns it: the opening post, without replies.
-type edThread struct {
+// Thread is a thread as the list endpoint returns it: the opening post, without replies.
+type Thread struct {
 	Content           string `json:"content"`
 	Category          string `json:"category"`
 	Subcategory       string `json:"subcategory"`
@@ -190,49 +187,49 @@ type edThread struct {
 	UpdatedAt         string `json:"updated_at"`
 }
 
-// edReply is an answer or a comment. Replies nest: each one has comments of its own.
-type edReply struct {
-	Content        string    `json:"content"`
-	ParentID       *int      `json:"parent_id"`
-	IsAnonymous    bool      `json:"is_anonymous"`
-	IsResolved     bool      `json:"is_resolved"`
-	IsPrivate      bool      `json:"is_private"`
-	CreatedByBotID *int      `json:"created_by_bot_id"`
-	VoteCount      int       `json:"vote_count"`
-	UpdatedAt      string    `json:"updated_at"`
-	ID             int       `json:"id"`
-	UserID         int       `json:"user_id"`
-	Type           string    `json:"type"` // answer or comment
-	Document       string    `json:"document"`
-	IsEndorsed     bool      `json:"is_endorsed"`
-	CreatedAt      string    `json:"created_at"`
-	DeletedAt      string    `json:"deleted_at"` // empty unless the reply was deleted
-	Comments       []edReply `json:"comments"`
+// Reply is an answer or a comment. Replies nest: each one has comments of its own.
+type Reply struct {
+	Content        string  `json:"content"`
+	ParentID       *int    `json:"parent_id"`
+	IsAnonymous    bool    `json:"is_anonymous"`
+	IsResolved     bool    `json:"is_resolved"`
+	IsPrivate      bool    `json:"is_private"`
+	CreatedByBotID *int    `json:"created_by_bot_id"`
+	VoteCount      int     `json:"vote_count"`
+	UpdatedAt      string  `json:"updated_at"`
+	ID             int     `json:"id"`
+	UserID         int     `json:"user_id"`
+	Type           string  `json:"type"` // answer or comment
+	Document       string  `json:"document"`
+	IsEndorsed     bool    `json:"is_endorsed"`
+	CreatedAt      string  `json:"created_at"`
+	DeletedAt      string  `json:"deleted_at"` // empty unless the reply was deleted
+	Comments       []Reply `json:"comments"`
 }
 
-// edThreadDetail is a thread with every reply under it.
-type edThreadDetail struct {
-	edThread
-	Answers  []edReply `json:"answers"`
-	Comments []edReply `json:"comments"`
+// ThreadDetail is a thread with every reply under it.
+type ThreadDetail struct {
+	Thread
+	Answers  []Reply `json:"answers"`
+	Comments []Reply `json:"comments"`
 }
 
-type edUser struct {
+type User struct {
 	ID         int    `json:"id"`
 	Name       string `json:"name"`
 	CourseRole string `json:"course_role"` // student, mentor or admin
 }
 
 // threads returns every thread in a course that the user can see: pinned first, then newest first.
-func (c *edClient) threads(ctx context.Context, courseID int) ([]edThread, error) {
-	var all []edThread
+func (c *Client) Threads(ctx context.Context, courseID int) ([]Thread, error) {
+	var all []Thread
 	seen := make(map[int]bool)
 	for offset := 0; ; {
 		path := fmt.Sprintf("/courses/%d/threads?limit=%d&offset=%d&sort=new", courseID, threadPageSize, offset)
 		var page struct {
-			Threads []edThread `json:"threads"`
+			Threads []Thread `json:"threads"`
 		}
-		if err := c.get(ctx, path, &page); err != nil {
+		if err := c.Get(ctx, path, &page); err != nil {
 			return nil, err
 		}
 		if page.Threads == nil {
@@ -258,15 +255,15 @@ func (c *edClient) threads(ctx context.Context, courseID int) ([]edThread, error
 }
 
 // thread returns one thread with all its replies, plus the users in it keyed by id.
-func (c *edClient) thread(ctx context.Context, id int) (edThreadDetail, map[int]edUser, error) {
+func (c *Client) Thread(ctx context.Context, id int) (ThreadDetail, map[int]User, error) {
 	var resp struct {
-		Thread edThreadDetail `json:"thread"`
-		Users  []edUser       `json:"users"`
+		Thread ThreadDetail `json:"thread"`
+		Users  []User       `json:"users"`
 	}
-	if err := c.get(ctx, fmt.Sprintf("/threads/%d", id), &resp); err != nil {
-		return edThreadDetail{}, nil, err
+	if err := c.Get(ctx, fmt.Sprintf("/threads/%d", id), &resp); err != nil {
+		return ThreadDetail{}, nil, err
 	}
-	users := make(map[int]edUser, len(resp.Users))
+	users := make(map[int]User, len(resp.Users))
 	for _, u := range resp.Users {
 		users[u.ID] = u
 	}
