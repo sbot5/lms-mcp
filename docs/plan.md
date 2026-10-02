@@ -180,6 +180,7 @@ internal/anonymize   capture 用的结构保留型脱敏
 - 离线：gofmt、vet、test 全部通过；Windows 交叉编译成功；用内存传输的 MCP 集成测试检查工具列表、注解和输出结构。
 - 云端真机：
   - Moodle 公开配置的探测结论写进 §4，只写结论，不写站点名。
+  - 第一件事：验证云环境注入的 Moodle cookie 能用，标准是 `/my/` 返回 200 而不是 303 跳到登录页。2026-10-02 在旧会话里试过一次失败了，可能是因为 credential 是在那个会话启动之后才加的。浏览器没有被登出，说明会话基本没有绑定 IP。如果新会话里还是失败，再排查负载均衡 cookie 和 cookie 格式。
   - `doctor` 对 Ed 和 Moodle 全部通过。Moodle 会话由云环境注入（D30）。
   - [ed-api.md](research/ed-api.md) 的六个未决问题有结论，并回写到那份笔记。
   - `capture` 生成的样本通过脱敏扫描，人工抽查后入库。
@@ -290,7 +291,7 @@ internal/anonymize   capture 用的结构保留型脱敏
     - **Custom headers** 的 Name 填 `Cookie`，清空 Prefix，Value 填 `MoodleSession…=<值>`。这个值从浏览器开发者工具 → Application → Cookies 里复制，找名字以 MoodleSession 开头的那条。
   - 环境变量里加 `MOODLE_AUTH=proxy`。
   - cookie 不进入云端机器。验收结束后在浏览器里点 Log out，cookie 立即失效。cookie 过期了就删掉这条 credential 重新加，正在运行的会话马上能用上。
-- **日历保底（D31）**：在 Moodle 日历 → Import or export calendars → Export calendar 里，选所有课程和「Recent and next 60 days」，生成链接，放进 `MOODLE_ICAL_URL`（Windows 上存凭据管理器）。这个链接不依赖会话。
+- **日历保底（D31）**：直接打开 `<Moodle 根地址>/calendar/export.php`（学校主题把日历页上的入口藏起来了，但导出功能是开着的，2026-10-02 已确认）。选全部事件和「Recent and next 60 days」，点 Get calendar URL，把链接放进 `MOODLE_ICAL_URL`（Windows 上存凭据管理器）。这个链接不依赖会话。
 
 ### 4.3 数据从哪里取（按访问记录从少到多）
 
@@ -358,6 +359,6 @@ internal/anonymize   capture 用的结构保留型脱敏
 
 1. ~~新建开发专用的 Ed token，放进云环境~~（已完成）。
 2. Moodle 会话：按 §4.2，在 API credentials 里加 `Cookie`，并在环境变量里加 `MOODLE_AUTH=proxy`。
-3. 日历链接：按 §4.2 生成，放进环境变量 `MOODLE_ICAL_URL`。
+3. 日历链接：按 §4.2，直接打开 `/calendar/export.php` 生成，放进环境变量 `MOODLE_ICAL_URL`。
 4. 云环境里不再需要 `MOODLE_TOKEN`，有的话删掉。
 5. 合并 M0 PR，然后开新会话开始 M1。环境变量只在新会话里才会被读取。
