@@ -62,10 +62,6 @@ func encode(out io.Writer, v any) error {
 	return e.Encode(v)
 }
 
-func runSetup(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer) error {
-	return notImplemented("setup")
-}
-
 func runSync(ctx context.Context, args []string, out, errOut io.Writer) error {
 	var full bool
 	var scope string
@@ -179,13 +175,4 @@ func runMCP(ctx context.Context, args []string, errOut io.Writer) error {
 		Sync:   svc,
 		Status: func() mcpserver.StatusReport { return buildStatus(cfg, sec, db) },
 	})
-}
-
-func runCapture(ctx context.Context, args []string, out, errOut io.Writer) error {
-	return notImplemented("capture")
-}
-
-// notImplemented marks a command a later milestone fills in.
-func notImplemented(name string) error {
-	return fmt.Errorf("%s: not implemented yet in this build", name)
 }

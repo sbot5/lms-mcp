@@ -8,15 +8,17 @@ try {
     $unformatted = @(& gofmt -l cmd internal)
     if ($LASTEXITCODE -ne 0) { throw 'gofmt check failed.' }
     if ($unformatted.Count) { throw ('Run gofmt on: ' + ($unformatted -join ', ')) }
-    & go test ./...
-    if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
     & go vet ./...
     if ($LASTEXITCODE -ne 0) { throw 'go vet failed.' }
-    $binary = & (Join-Path $PSScriptRoot 'build.ps1')
-    & $binary version
+    & go test ./...
+    if ($LASTEXITCODE -ne 0) { throw 'Tests failed.' }
+    $bin = if ($IsWindows) { 'bin/lms-mcp.exe' } else { 'bin/lms-mcp' }
+    & go build -trimpath -o $bin ./cmd/lms-mcp
+    if ($LASTEXITCODE -ne 0) { throw 'Build failed.' }
+    & $bin version
     if ($LASTEXITCODE -ne 0) { throw 'Version smoke test failed.' }
-    foreach ($example in @('sync.example.json','moodle.example.json')) {
-        & $binary config validate -config (Join-Path $root "examples/$example")
-        if ($LASTEXITCODE -ne 0) { throw "Config smoke test failed: $example" }
-    }
+    $env:GOOS = 'windows'; $env:GOARCH = 'amd64'
+    & go build -trimpath -o (Join-Path ([System.IO.Path]::GetTempPath()) 'lms-mcp-crosscheck.exe') ./cmd/lms-mcp
+    Remove-Item Env:GOOS, Env:GOARCH
+    if ($LASTEXITCODE -ne 0) { throw 'Windows cross-build failed.' }
 } finally { Pop-Location }

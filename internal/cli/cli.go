@@ -24,7 +24,6 @@ const usage = `lms-mcp — read-only Ed and Moodle mirror with a stdio MCP serve
   status           show local freshness without network access
   list             list configured courses
   search <query>   full-text search the local index
-  capture          save anonymized API fixtures (development)
   mcp              serve MCP over stdio
   version          print the version
 
@@ -60,8 +59,6 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return runList(ctx, rest, out)
 	case "search":
 		return runSearch(ctx, rest, out)
-	case "capture":
-		return runCapture(ctx, rest, out, errOut)
 	case "mcp":
 		return runMCP(ctx, rest, errOut)
 	default:

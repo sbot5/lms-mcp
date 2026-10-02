@@ -8,7 +8,7 @@
 | 里程碑 | 内容 | 状态 | PR |
 |---|---|---|---|
 | M0 | 计划、协作文件、调研笔记 | 用户已审阅通过（2026-10-02），待合并 | [#2](https://github.com/sbot5/lms-mcp/pull/2) |
-| M1 | 新骨架：配置、凭证、HTTP 守卫、SQLite、认证、doctor/capture、MCP 框架 | 未开始 | |
+| M1 | 新骨架：配置、凭证、HTTP 守卫、SQLite、认证、doctor、MCP 框架 | 开发中 | |
 | M2 | Ed 全量：Lessons、Resources、讨论、作答与截止 | 未开始 | |
 | M3 | Moodle 课件与资源 | 未开始 | |
 | M4 | 文档解析与全文搜索 | 未开始 | |
@@ -175,7 +175,6 @@ internal/anonymize   capture 用的结构保留型脱敏
      - section 片段能否使用、整门课打包下载是否开启；
      - 日历导出链接能否读取。
      对应的单次检查见 [moodle-session.md](research/moodle-session.md) 的 Open questions。
-   - `capture`：采集脱敏样本，见 §5。
 4. MCP 框架：工具注册约定、输出预算、cursor 编码、错误文案、同步任务框架（租约、goroutine、进度），以及 `list_courses`、`sync_start`、`sync_status`、`get_status`。
 5. CI 精简为 ubuntu 和 windows 两个平台，Go 版本保留 1.25.x 和 stable。
 6. 重写 README、`docs/architecture.md`，删掉 `docs/moodle.md` 等过时文档。
@@ -187,9 +186,10 @@ internal/anonymize   capture 用的结构保留型脱敏
   - 第一件事：验证云环境注入的 Moodle cookie 能用，标准是 `/my/` 返回 200 而不是 303 跳到登录页。2026-10-02 在旧会话里试过一次失败了，可能是因为 credential 是在那个会话启动之后才加的。浏览器没有被登出，说明会话基本没有绑定 IP。如果新会话里还是失败，再排查负载均衡 cookie 和 cookie 格式。
   - `doctor` 对 Ed 和 Moodle 全部通过。Moodle 会话由云环境注入（D30）。
   - [ed-api.md](research/ed-api.md) 的六个未决问题有结论，并回写到那份笔记。
-  - `capture` 生成的样本通过脱敏扫描，人工抽查后入库。
 
 ### M2 Ed 全量
+
+- `capture` 命令与 `internal/anonymize`：采集脱敏样本入库，供离线测试使用（见 §5）。从 M1 顺延。
 
 - Ed 侧的课程发现与配对。
 - Lessons：
@@ -258,7 +258,7 @@ internal/anonymize   capture 用的结构保留型脱敏
 
 ### M6 后台同步、Windows 通知、安装与发布
 
-- `lms-mcp schedule install|remove|status`：直接调用 `schtasks.exe` 或 Task Scheduler COM，不依赖 PowerShell 7。任务每小时运行，登录时也触发一次，只在用户登录时运行，窗口隐藏。
+- `lms-mcp schedule install|remove|status`：直接调用 `schtasks.exe` 或 Task Scheduler COM，不依赖 PowerShell 7。任务每小时运行，登录时也触发一次，只在用户登录时运行，窗口隐藏。同时刷新 `scripts/` 下遗留的 v0.3.0 计划任务与发布脚本（`install-task.ps1`、`run-sync.ps1`、`build-release.ps1`）。
 - 通知：
   - 先做 spike，确认纯 Go 的 toast 实现能在计划任务里弹出来（需要 AppUserModelID）。
   - 规则见 D9。一次同步产生的多条事件合并成一条通知，并去重；点击通知打开对应网页。

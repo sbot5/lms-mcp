@@ -23,3 +23,9 @@ coverage.out
 
 # agent worktrees (local only)
 .claude/worktrees/
+
+# local data directories (index + downloads)
+/data/
+examples/data/
+lms.db
+lms.db-*
