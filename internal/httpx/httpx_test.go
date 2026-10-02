@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -103,6 +104,15 @@ func TestMoodleGuardAjax(t *testing.T) {
 	if err := g.Check(mustReq(t, "POST", "https://m.example.edu/mod/forum/post.php", okBody)); err == nil {
 		t.Error("want refuse POST to a non-AJAX path")
 	}
+
+	// The no-login public-config probe is allowed only for that one method.
+	probe := `[{"index":0,"methodname":"tool_mobile_get_public_config","args":{}}]`
+	if err := g.Check(mustReq(t, "POST", "https://m.example.edu/lib/ajax/service-nologin.php?info=x", probe)); err != nil {
+		t.Errorf("want allow public-config probe, got %v", err)
+	}
+	if err := g.Check(mustReq(t, "POST", "https://m.example.edu/lib/ajax/service-nologin.php", okBody)); err == nil {
+		t.Error("no-login endpoint must reject non-public-config methods")
+	}
 }
 
 func TestMoodleGuardSubdir(t *testing.T) {
@@ -160,11 +170,22 @@ func TestClientGuardBlocks(t *testing.T) {
 	}
 }
 
+// failTransport returns a url.Error that embeds the request URL, as net/http
+// does, so the test can confirm the Client strips it.
+type failTransport struct{}
+
+func (failTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	return nil, &url.Error{Op: "Get", URL: req.URL.String(), Err: fmt.Errorf("dial tcp: refused")}
+}
+
 func TestClientErrorRedactsURL(t *testing.T) {
-	c, _ := New(Options{Guard: allowAll{}, RequestsPerS: 1000, MaxRetry: 0, Timeout: 500 * time.Millisecond})
-	_, err := c.Do(mustReq(t, "GET", "https://127.0.0.1:1/secret?token=abc", ""))
+	old := backoffBase
+	backoffBase = time.Millisecond
+	defer func() { backoffBase = old }()
+	c, _ := New(Options{Guard: allowAll{}, RequestsPerS: 1000, Transport: failTransport{}})
+	_, err := c.Do(mustReq(t, "GET", "https://host.example/secret?token=abc", ""))
 	if err == nil {
-		t.Fatal("expected a connection error")
+		t.Fatal("expected a transport error")
 	}
 	if strings.Contains(err.Error(), "token=abc") || strings.Contains(err.Error(), "secret") {
 		t.Fatalf("error leaked the URL: %v", err)

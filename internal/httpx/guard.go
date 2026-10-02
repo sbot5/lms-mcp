@@ -71,7 +71,12 @@ var moodleGetPaths = []pathRule{
 	{suffix: "/webservice/pluginfile.php/", exact: false},
 }
 
-const moodleAjaxPath = "/lib/ajax/service.php"
+const (
+	moodleAjaxPath    = "/lib/ajax/service.php"
+	moodleNoLoginPath = "/lib/ajax/service-nologin.php"
+	// publicConfigMethod is the only method allowed on the no-login endpoint.
+	publicConfigMethod = "tool_mobile_get_public_config"
+)
 
 type pathRule struct {
 	suffix string
@@ -106,10 +111,14 @@ func (g MoodleGuard) Check(req *http.Request) error {
 		}
 		return fmt.Errorf("read-only: Moodle path %q is not on the read-only allowlist", trimBase(clean, basePath))
 	case http.MethodPost:
-		if trimBase(clean, basePath) != moodleAjaxPath {
+		switch trimBase(clean, basePath) {
+		case moodleAjaxPath:
+			return checkAjaxBody(req, MoodleAllowedMethods)
+		case moodleNoLoginPath:
+			return checkAjaxBody(req, map[string]bool{publicConfigMethod: true})
+		default:
 			return fmt.Errorf("read-only: Moodle POST is allowed only to the AJAX endpoint")
 		}
-		return checkAjaxBody(req)
 	default:
 		return fmt.Errorf("read-only: Moodle allows only GET and AJAX POST, not %s", req.Method)
 	}
@@ -138,8 +147,8 @@ func trimBase(clean, basePath string) string {
 	return strings.TrimPrefix(clean, basePath)
 }
 
-// checkAjaxBody parses the AJAX batch and refuses any non-allowlisted method.
-func checkAjaxBody(req *http.Request) error {
+// checkAjaxBody parses the AJAX batch and refuses any method not in allowed.
+func checkAjaxBody(req *http.Request, allowed map[string]bool) error {
 	if req.GetBody == nil {
 		return fmt.Errorf("read-only: AJAX request without an inspectable body was refused")
 	}
@@ -162,7 +171,7 @@ func checkAjaxBody(req *http.Request) error {
 		return fmt.Errorf("read-only: empty AJAX batch was refused")
 	}
 	for _, c := range calls {
-		if !MoodleAllowedMethods[c.MethodName] {
+		if !allowed[c.MethodName] {
 			return fmt.Errorf("read-only: AJAX method %q is not on the allowlist", c.MethodName)
 		}
 	}

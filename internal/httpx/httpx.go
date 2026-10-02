@@ -8,6 +8,7 @@
 package httpx
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -130,43 +131,40 @@ func (c *Client) Do(req *http.Request) (*http.Response, error) {
 		}
 	}
 
+	ctx := req.Context()
 	var lastErr error
-	for attempt := 0; attempt <= c.maxRetry; attempt++ {
-		if err := c.wait(req.Context()); err != nil {
+	for attempt := 0; ; attempt++ {
+		if err := c.wait(ctx); err != nil {
 			return nil, err
 		}
 		attemptReq := req
 		if attempt > 0 && body != nil {
-			attemptReq = req.Clone(req.Context())
-			attemptReq.Body = io.NopCloser(strings.NewReader(string(body)))
+			attemptReq = req.Clone(ctx)
+			attemptReq.Body = io.NopCloser(bytes.NewReader(body))
 		}
 		resp, err := c.hc.Do(attemptReq)
-		if err != nil {
-			if req.Context().Err() != nil {
-				return nil, req.Context().Err()
+		var retryAfter time.Duration
+		switch {
+		case err != nil:
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
 			}
 			// net/http wraps the URL in err; do not surface it.
 			lastErr = &redactedError{what: "request failed; check network, site and session"}
-		} else if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
-			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+		case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+			retryAfter = parseRetryAfter(resp.Header.Get("Retry-After"))
 			resp.Body.Close()
 			lastErr = &redactedError{what: "server temporarily unavailable", code: resp.StatusCode}
-			if attempt < c.maxRetry {
-				if werrr := sleep(req.Context(), backoff(attempt, retryAfter)); werrr != nil {
-					return nil, werrr
-				}
-				continue
-			}
-		} else {
+		default:
 			return resp, nil
 		}
-		if attempt < c.maxRetry && StatusCode(lastErr) == 0 {
-			if werrr := sleep(req.Context(), backoff(attempt, 0)); werrr != nil {
-				return nil, werrr
-			}
+		if attempt >= c.maxRetry {
+			return nil, lastErr
+		}
+		if err := sleep(ctx, backoff(attempt, retryAfter)); err != nil {
+			return nil, err
 		}
 	}
-	return nil, lastErr
 }
 
 func (c *Client) wait(ctx context.Context) error {
