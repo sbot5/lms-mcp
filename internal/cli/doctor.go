@@ -43,11 +43,26 @@ func runDoctor(ctx context.Context, args []string, out, errOut io.Writer) error 
 		}
 	}
 
-	// Moodle: readiness. Live probing arrives with the session client.
-	if p.MoodleAuth == "" {
+	// Moodle: public-config probe (no login) then a live session check.
+	if p.Moodle == nil {
 		checks = append(checks, check{Name: "moodle", OK: !cfg.Moodle.Enabled, Detail: p.MoodleReason})
 	} else {
-		checks = append(checks, check{Name: "moodle", OK: true, Detail: p.MoodleAuth + " session configured (live probe pending)"})
+		if pc, err := p.Moodle.PublicConfig(ctx); err != nil {
+			checks = append(checks, check{Name: "moodle.site", OK: false, Detail: "public config probe failed"})
+		} else {
+			checks = append(checks, check{Name: "moodle.site", OK: true, Detail: fmt.Sprintf("release %s, mobile_ws=%v", pc.Release, pc.EnableMobileWebService)})
+		}
+		sk, err := p.Moodle.Sesskey(ctx)
+		if err != nil {
+			checks = append(checks, check{Name: "moodle.session", OK: false, Detail: "session invalid; run `lms-mcp auth moodle`"})
+		} else {
+			checks = append(checks, check{Name: "moodle.session", OK: true, Detail: p.MoodleAuth + " session valid"})
+			if courses, err := p.Moodle.Courses(ctx, sk.Value); err != nil {
+				checks = append(checks, check{Name: "moodle.courses", OK: false, Detail: "course list failed"})
+			} else {
+				checks = append(checks, check{Name: "moodle.courses", OK: true, Detail: fmt.Sprintf("%d courses", len(courses))})
+			}
+		}
 	}
 
 	ok := true

@@ -11,6 +11,7 @@ import (
 	"github.com/sbot5/lms-mcp/internal/config"
 	"github.com/sbot5/lms-mcp/internal/ed"
 	"github.com/sbot5/lms-mcp/internal/httpx"
+	"github.com/sbot5/lms-mcp/internal/moodle"
 	"github.com/sbot5/lms-mcp/internal/secrets"
 	"github.com/sbot5/lms-mcp/internal/version"
 )
@@ -24,6 +25,7 @@ type Providers struct {
 	EdAuth   string // "token", "proxy", or "" when Ed is unavailable
 	EdReason string // why Ed is unavailable, for status/doctor
 
+	Moodle       *moodle.Session
 	MoodleBase   *url.URL
 	MoodleAuth   string // "cookie", "proxy", or "" when unavailable
 	MoodleCookie string // raw Cookie header; empty in proxy mode
@@ -89,28 +91,23 @@ func (p *Providers) buildMoodle(cfg *config.Config, store secrets.Store, ua stri
 	p.MoodleBase = base
 	if secrets.Proxy("moodle") {
 		p.MoodleAuth = "proxy"
-		return nil
+	} else {
+		cookie, ok, err := store.Get(secrets.MoodleCookie)
+		if err != nil {
+			return fmt.Errorf("reading Moodle cookie failed")
+		}
+		if !ok {
+			return fmt.Errorf("no Moodle session; run `lms-mcp auth moodle` or set MOODLE_COOKIE")
+		}
+		p.MoodleCookie, p.MoodleAuth = cookie, "cookie"
 	}
-	cookie, ok, err := store.Get(secrets.MoodleCookie)
-	if err != nil {
-		return fmt.Errorf("reading Moodle cookie failed")
-	}
-	if !ok {
-		return fmt.Errorf("no Moodle session; run `lms-mcp auth moodle` or set MOODLE_COOKIE")
-	}
-	p.MoodleCookie, p.MoodleAuth = cookie, "cookie"
-	return nil
-}
-
-// MoodleClient builds a read-only httpx client for the Moodle site, or returns
-// nil when Moodle is unavailable. The Moodle session client (M1 follow-up) is
-// constructed on top of this.
-func (p *Providers) MoodleClient() (*httpx.Client, error) {
-	if p.MoodleBase == nil || p.MoodleAuth == "" {
-		return nil, fmt.Errorf("Moodle is not available: %s", p.MoodleReason)
-	}
-	return httpx.New(httpx.Options{
-		Guard:     httpx.MoodleGuard{Base: p.MoodleBase},
-		UserAgent: httpx.UserAgent(version.Version),
+	doer, err := httpx.New(httpx.Options{
+		Guard:     httpx.MoodleGuard{Base: base},
+		UserAgent: ua,
 	})
+	if err != nil {
+		return err
+	}
+	p.Moodle = moodle.NewSession(doer, base, p.MoodleCookie, p.MoodleAuth == "proxy")
+	return nil
 }

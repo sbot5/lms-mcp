@@ -172,6 +172,12 @@ func (s *Service) sync(ctx context.Context, scope string, full bool) (int, error
 		}
 		active = append(active, eds...)
 	}
-	// Moodle discovery is wired when the session client lands.
+	if p.Moodle != nil && (scope == "all" || scope == "moodle") {
+		ms, err := DiscoverMoodle(ctx, p, s.db)
+		if err != nil {
+			return len(active), err
+		}
+		active = append(active, ms...)
+	}
 	return len(active), nil
 }

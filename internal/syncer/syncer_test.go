@@ -13,6 +13,7 @@ import (
 	"github.com/sbot5/lms-mcp/internal/config"
 	"github.com/sbot5/lms-mcp/internal/ed"
 	"github.com/sbot5/lms-mcp/internal/httpx"
+	"github.com/sbot5/lms-mcp/internal/moodle"
 	"github.com/sbot5/lms-mcp/internal/store"
 )
 
@@ -126,6 +127,62 @@ func TestServiceRunAndLease(t *testing.T) {
 	// Lease must be released after the run.
 	if ok, _ := db.AcquireLease(leaseName, "someone-else", 60); !ok {
 		t.Fatal("lease was not released after the job finished")
+	}
+}
+
+func TestDiscoverMoodlePairs(t *testing.T) {
+	edSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(whoamiJSON))
+	}))
+	defer edSrv.Close()
+	moodleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == "GET" && r.URL.Path == "/user/preferences.php":
+			w.Write([]byte(`<script>M.cfg = {"sesskey":"sk1","contextid":1,"userId":2};</script>`))
+		case r.Method == "POST" && r.URL.Path == "/lib/ajax/service.php":
+			w.Write([]byte(`[{"error":false,"data":{"courses":[
+				{"id":500,"shortname":"ABC1234","fullname":"Algorithms","visible":1},
+				{"id":501,"shortname":"DEF5678 Databases","fullname":"Databases","visible":1}
+			]}}]`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer moodleSrv.Close()
+
+	db := openStore(t)
+	p := testProviders(t, edSrv.URL)
+	if _, err := DiscoverEd(context.Background(), p, db); err != nil {
+		t.Fatal(err)
+	}
+
+	base, _ := url.Parse(moodleSrv.URL)
+	doer, err := httpx.New(httpx.Options{Guard: httpx.MoodleGuard{Base: base}, RequestsPerS: 1000})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Moodle = moodle.NewSession(doer, base, "MoodleSession=x", false)
+
+	active, err := DiscoverMoodle(context.Background(), p, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 2 {
+		t.Fatalf("expected 2 active Moodle courses, got %d", len(active))
+	}
+	all, _ := db.ListCourses()
+	byID := map[string]store.Course{}
+	for _, c := range all {
+		byID[c.ID] = c
+	}
+	// ABC1234 was an Ed course; Moodle discovery must pair into the same row.
+	paired := byID["ABC1234-2026S2"]
+	if paired.EdCourseID != 10 || paired.MoodleCourseID != 500 {
+		t.Fatalf("pairing failed: %+v", paired)
+	}
+	// DEF5678 exists only on Moodle.
+	if c := byID["DEF5678"]; c.MoodleCourseID != 501 || c.EdCourseID != 0 {
+		t.Fatalf("moodle-only course wrong: %+v", c)
 	}
 }
 
