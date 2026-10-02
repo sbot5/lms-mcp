@@ -20,3 +20,6 @@ courses/
 dist/
 *.log
 coverage.out
+
+# agent worktrees (local only)
+.claude/worktrees/
