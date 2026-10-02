@@ -8,7 +8,7 @@
 | 里程碑 | 内容 | 状态 | PR |
 |---|---|---|---|
 | M0 | 计划、协作文件、调研笔记 | 用户已审阅通过（2026-10-02），待合并 | [#2](https://github.com/sbot5/lms-mcp/pull/2) |
-| M1 | 新骨架：配置、凭证、HTTP 守卫、SQLite、认证、doctor、MCP 框架 | 开发中 | |
+| M1 | 新骨架：配置、凭证、HTTP 守卫、SQLite、认证、doctor、MCP 框架 | 待审阅 | [#3](https://github.com/sbot5/lms-mcp/pull/3) |
 | M2 | Ed 全量：Lessons、Resources、讨论、作答与截止 | 未开始 | |
 | M3 | Moodle 课件与资源 | 未开始 | |
 | M4 | 文档解析与全文搜索 | 未开始 | |
