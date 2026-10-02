@@ -1,7 +1,7 @@
 # lms-mcp v1 开发计划
 
 > 这是开发的唯一事实来源：决策、架构、里程碑、验收标准和进度都在这里。新会话从 `AGENTS.md` 开始读，然后读本文件的「进度」表和当前里程碑那一节，不需要聊天记录。
-> 调研笔记：[Ed API](research/ed-api.md) · [Moodle Web Services](research/moodle-ws.md) · [MCP 客户端限制](research/mcp-clients.md)
+> 调研笔记：[Ed API](research/ed-api.md) · [Moodle 会话访问](research/moodle-session.md) · [Moodle Web Services（学校已关闭，仅作参考）](research/moodle-ws.md) · [MCP 客户端限制](research/mcp-clients.md)
 
 ## 进度
 
@@ -33,7 +33,7 @@
 | D8 | 文档解析 | 把 PDF/PPTX/DOCX/ipynb 按页提取成文本，并建全文搜索。暂不做幻灯片截图 | 用户 |
 | D9 | 后台与通知 | 增量同步加 Windows 通知。通知四类事件：老师帖与公告、新成绩与评语、临近截止（未提交，提前 48h 和 24h）、我的帖子有新回复 | 用户 |
 | D10 | 课程范围 | 自动发现本学期全部课程，按课程代码（如 ABC1234）配对 Ed 与 Moodle，允许排除。历史学期保留，但不再刷新 | 用户 |
-| D11 | 凭证 | 存在 Windows 凭据管理器。云端开发时读环境变量 `ED_API_TOKEN` 和 `MOODLE_TOKEN` | 用户 |
+| D11 | 凭证 | 存在 Windows 凭据管理器。云端开发时读环境变量（`ED_API_TOKEN`、`MOODLE_COOKIE`、`MOODLE_ICAL_URL`），或由环境的 API credentials 在代理层注入（D30） | 用户 |
 | D12 | 存储 | 普通本地文件夹，不放 OneDrive。视频不下载，只保留链接。单文件上限默认 200 MB，可配置 | 用户 |
 | D13 | 兼容性 | 不兼容 v0.3.0，重新设计存储。升级后全量同步一次 | 用户 |
 | D14 | 验收 | 在云端用开发专用 token 做真机验收，结束后吊销。接口返回脱敏成离线样本后入库 | 用户 |
@@ -47,9 +47,13 @@
 | D22 | 技术栈 | 继续用 Go，单文件可执行程序，只用纯 Go 依赖（不用 CGO）。SQLite 用 `modernc.org/sqlite`（含 FTS5） | 默认 |
 | D23 | 语言 | 面向用户的文档用中文。代码、注释、工具描述和 AGENTS.md 用英文（对模型更友好） | 默认 |
 | D24 | Ed 私密帖 | 默认包含（只会是你自己的或分享给你的私密帖），这样「我的帖子新回复」提醒才完整 | 默认 |
-| D25 | Moodle 认证 | 用 Moodle App 同款的 `moodle_mobile_app` 服务 token，通过 SSO launch 流程在你自己的浏览器里获取。不用 privatetoken/autologin，不冒充 App，User-Agent 如实填写。见 §4 | 默认（待 M1 探测） |
+| D25 | Moodle 认证 | ~~App 同款 token~~ 不可行：2026-10-02 探测显示学校关闭了移动服务（`enablemobilewebservice=0`，`typeoflogin=1`，SAML2 登录，Moodle 4.5–5.1），学生也拿不到其他 Web Service token。改为浏览器会话方案（D27） | 探测 |
 | D26 | 公开仓库 | 仓库保持公开，但提交的任何内容（文档、样本、测试、提交信息）都不出现学校名、Moodle 域名或其他能识别用户的信息 | 用户 |
-| D27 | Moodle 备选 | 如果学校关闭了移动服务：用浏览器自动化，即一个独立的 Edge 配置文件保持登录，同步时从中取会话 | 用户 |
+| D27 | Moodle 会话 | 主方案：只在登录时用一个独立的 Edge 配置文件（CDP 驱动），读出会话 cookie 存进凭据管理器。平时同步只用 cookie 加 sesskey 发普通 HTTP 请求，不开浏览器。见 §4 | 用户 |
+| D28 | 访问记录 | 接受 Moodle 记录「已查看」，并可能自动勾选「查看即完成」，但要尽量少触发：课件只在第一次下载时打开一次页面，之后直接用文件链接；成绩页只在收到评分通知时或每天读一次；作业和测验页只在新出现或你问到时读 | 用户 |
+| D29 | 重新登录 | 你几乎每天都要重新输 学校统一登录的密码和 MFA。会话过期时，先用那个 Edge 配置文件在后台静默续期；续不上再弹通知，你点一下完成登录。登录过期期间 Ed 照常同步，截止提醒靠 D31 | 用户 |
+| D30 | 云端 Moodle 会话 | 云端开发用环境的 API credentials 注入 `Cookie` 头，cookie 不进入云端机器。环境变量设 `MOODLE_AUTH=proxy`。验收结束后在浏览器里点 Log out，cookie 立即失效 | 用户 |
+| D31 | 日历保底 | 用 Moodle 日历导出链接（`MOODLE_ICAL_URL`，长期有效、只能读日历）给截止日期做保底，不依赖登录状态 | 用户 |
 
 ## 2. 目标架构
 
@@ -61,7 +65,7 @@ internal/config      配置（%APPDATA%\lms-mcp\config.json）
 internal/secrets     Windows 凭据管理器；非 Windows 或云端回退到环境变量
 internal/httpx       共享 HTTP：User-Agent、每个主机限速、重试（429/5xx/Retry-After）、超时、错误脱敏、只读守卫
 internal/ed          Ed API 客户端（只发 GET）
-internal/moodle      Moodle WS 客户端（只调函数白名单）、公开配置探测、SSO token 获取
+internal/moodle      Moodle 会话客户端：AJAX（函数白名单）、页面与文件、iCal、公开配置探测；Windows 上用 CDP 驱动 Edge 登录
 internal/render      Ed XML、Moodle HTML 转 Markdown（沿用 v0.3.0 的 render 包）
 internal/store       SQLite（WAL）：schema、迁移、FTS5、事件、同步租约
 internal/files       文件镜像：流式下载、临时文件加原子改名、大小上限、视频只留链接
@@ -117,13 +121,8 @@ internal/anonymize   capture 用的结构保留型脱敏
     - 自己的提交和成绩：学生能读到就同步。
   - Resources：课程的 `features.resources` 打开时，列表并下载。
   - 讨论：按 `sort=new` 翻页到水位线，对新帖和有变化的帖子拉详情；每天一次全量对账，检测删除和编辑。
-- **Moodle**（认证与函数白名单见 §4，细节见 [moodle-ws.md](research/moodle-ws.md)）：
-  - 课件走 `core_course_get_contents`，所有调用都带 `moodlewssettingfilter=true`。
-  - 文件通过 `webservice/pluginfile.php` 条件下载（ETag 是文件内容哈希，支持 304），加 `offline=1`。token 尽量不放进 URL。
-  - 增量用 `core_course_get_updates_since` / `core_course_check_updates`。
-  - 作业、测验、成绩、论坛、日历和站内通知走各自的只读函数。
-  - 绝不调用 `*_view_*` 一类函数：它们会记录访问日志并改变完成状态。
-  - 遇到 `requireloginerror` 只跳过对应的课程或活动。
+- **Moodle**：走浏览器会话，按访问记录从少到多排序取数据。路径、白名单和会话管理见 §4。
+  - 截止日期优先从日历导出链接取（D31）。
 - **变更检测**：对每个条目的规范化内容算哈希。第一次导入是 baseline，不提醒。
 - **事件类型**：`staff_post`、`announcement`、`reply_to_me`、`new_material`、`material_changed`、`new_grade`、`feedback`、`deadline_added`、`deadline_changed`。`deadline_soon` 在本地计算。
 - **并发**：Claude Code、Codex、计划任务可能同时各开一个进程。SQLite 用 WAL 和 busy_timeout，同步用租约保证同一时刻只跑一个。
@@ -164,14 +163,14 @@ internal/anonymize   capture 用的结构保留型脱敏
 
 ### M1 新骨架（能连上、能存储、能被调用）
 
-1. 删除 v0.3.0 的同步、导出和存储代码（`internal/app` 里的 storage、sync、ed_lessons、ed_records、moodle_sync、moodle_calendar、setup，Moodle 的 iCal，旧计划任务脚本）。保留可复用的 `internal/ed`、`internal/render`。Moodle 的 Cookie/HTML 发现代码：探测确认移动服务可用就删除，否则保留给 §4.3 的备选方案。
+1. 删除 v0.3.0 的同步、导出和存储代码（`internal/app` 里的 storage、sync、ed_lessons、ed_records、moodle_sync、setup，旧计划任务脚本）。保留可复用的 `internal/ed`、`internal/render`，以及 Moodle 的 Cookie 请求、HTML 发现和 iCal 解析代码，在 M1/M3 里改造。
 2. 新建 `config`、`secrets`（`github.com/danieljoos/wincred`；没有凭据管理器时读环境变量；`ED_AUTH=proxy` 时 Ed 请求不带 Authorization 头，由云环境的 API credential 在代理层注入）、`httpx`（含只读守卫：Ed 只允许 GET；Moodle 只允许对 `/webservice/rest/server.php` 调用白名单函数和下载 pluginfile）。
 3. `store`：建立 schema v1 和迁移框架，开启 WAL，实现租约。
 4. 新增命令：
    - `auth ed`：隐藏输入粘贴 token，存进凭据管理器。
-   - `auth moodle`：§4 的流程。
+   - `auth moodle`：M1 只支持读取环境变量或代理注入的会话（云端开发用）。Windows 上用 Edge 配置文件登录放到 M3。
    - `auth status`：只显示是否已配置，不显示值。
-   - `doctor`：检查凭证、连通性、身份、课程发现，以及 Moodle 站点信息和可用函数是否覆盖白名单。
+   - `doctor`：检查凭证、连通性、身份和课程发现；Moodle 部分还要检查会话是否有效、能否拿到 sesskey、白名单里哪些 AJAX 函数可用，以及日历导出链接能否读取。
    - `capture`：采集脱敏样本，见 §5。
 5. MCP 框架：工具注册约定、输出预算、cursor 编码、错误文案、同步任务框架（租约、goroutine、进度），以及 `list_courses`、`sync_start`、`sync_status`、`get_status`。
 6. CI 精简为 ubuntu 和 windows 两个平台，Go 版本保留 1.25.x 和 stable。
@@ -181,7 +180,7 @@ internal/anonymize   capture 用的结构保留型脱敏
 - 离线：gofmt、vet、test 全部通过；Windows 交叉编译成功；用内存传输的 MCP 集成测试检查工具列表、注解和输出结构。
 - 云端真机：
   - Moodle 公开配置的探测结论写进 §4，只写结论，不写站点名。
-  - `doctor` 对 Ed 和 Moodle 全部通过。
+  - `doctor` 对 Ed 和 Moodle 全部通过。Moodle 会话由云环境注入（D30）。
   - [ed-api.md](research/ed-api.md) 的六个未决问题有结论，并回写到那份笔记。
   - `capture` 生成的样本通过脱敏扫描，人工抽查后入库。
 
@@ -204,14 +203,15 @@ internal/anonymize   capture 用的结构保留型脱敏
 
 ### M3 Moodle 课件与资源
 
+- Windows 上的 `auth moodle`：用 CDP 打开专用 Edge 配置文件的登录窗口，读取会话 cookie 存进凭据管理器；会话过期时先在后台静默续期，失败才通知你（D27、D29）。打预发布版 `v1.0.0-m3`，由你在 Windows 上验收这一项。
 - Moodle 侧的课程发现与配对。
-- 用 `core_course_get_contents` 取各节和活动：
+- 取各节和活动（具体接口见 §4.3）：
   - resource 和 folder 的文件做条件下载（流式、受大小上限约束、视频只留链接）。
   - page、book、label 转 Markdown，包括其中嵌入的文件。
   - url 只保留链接。
   - 下载活动简介里的附件。
   - 其他活动（assign、quiz、forum、lesson 等）先登记为条目，详情放到 M5。
-- 增量：用 `core_course_get_updates_since` 或 `check_updates`，再结合文件的 timemodified、ETag 和 Last-Modified。
+- 增量：对比课程结构快照，再结合文件的 ETag 和 Last-Modified。按 D28，同一个活动的页面只在第一次发现时打开。
 - MCP：`list_materials` 和 `read_material` 覆盖 Moodle，`whats_new` 加入 Moodle 资料事件。
 
 验收：
@@ -238,8 +238,8 @@ internal/anonymize   capture 用的结构保留型脱敏
 ### M5 Moodle 作业、测验、成绩、论坛、日历、站内通知
 
 - 作业：要求、附件、截止和截止后宽限、提交状态、分数、评语和反馈文件。
-- 测验：开放和关闭时间、尝试记录（5.0 起用 `mod_quiz_get_user_quiz_attempts`，更早的版本用 `mod_quiz_get_user_attempts`）、最好成绩、反馈。答题回顾受测验的回顾设置限制，拿不到时返回 `noreview`。
-- 成绩册：逐项成绩、权重、评语和总评。
+- 测验：开放和关闭时间、尝试记录、最好成绩、反馈。按 D28，只在新出现或你问到时读测验页。
+- 成绩册：逐项成绩、权重、评语和总评。按 D28，只在收到评分通知时或每天读一次。
 - 论坛：公告论坛和课程论坛的讨论与帖子，作者显示规则同 D20。
 - 日历和截止：action events 写入 `deadlines`。时区以站点和用户资料里的时区为准。
 - 站内通知：只读。
@@ -257,8 +257,7 @@ internal/anonymize   capture 用的结构保留型脱敏
 - 通知：
   - 先做 spike，确认纯 Go 的 toast 实现能在计划任务里弹出来（需要 AppUserModelID）。
   - 规则见 D9。一次同步产生的多条事件合并成一条通知，并去重；点击通知打开对应网页。
-  - 凭证过期时也弹通知，提示运行 `lms-mcp auth moodle`。
-- `auth moodle` 自动化：在 HKCU 注册 `moodlemobile://` 协议处理器，自动接收 SSO 回调里的 token。注册失败时退回粘贴方式。
+  - Moodle 会话过期、后台续期又失败时弹通知，点一下打开登录窗口（D29）。
 - 发布：
   - CI 构建 Windows amd64/arm64 的 zip 和 checksums。
   - `install.ps1` 兼容 Windows PowerShell 5.1：下载最新版本、校验、安装到 `%LOCALAPPDATA%\Programs\lms-mcp` 并加入 PATH，然后运行 `lms-mcp setup`。
@@ -272,82 +271,47 @@ internal/anonymize   capture 用的结构保留型脱敏
 - 计划任务每小时运行一次。
 - 收到一条测试通知。
 
-## 4. Moodle 认证方案
+## 4. Moodle 访问方案（浏览器会话）
 
-细节和出处见 [moodle-ws.md](research/moodle-ws.md)。
+### 4.1 探测结论（2026-10-02）
 
-### 4.1 主方案：Moodle App 同款 token
+- 学校的 Moodle 关闭了移动服务（`enablemobilewebservice=0`）。`typeoflogin=1`，通过 SAML2 登录，版本在 4.5 到 5.1 之间。学生拿不到任何 Web Service token，所以 [moodle-ws.md](research/moodle-ws.md) 里的 token 方案不可用。
+- 改用浏览器会话：Moodle 的会话 cookie（`MoodleSession…`）加 `sesskey`，和你自己用浏览器访问是同一个身份。
 
-- 学校用 SSO + MFA，所以 `login/token.php` 的用户名密码方式用不了。
-- 改走 Moodle App 的 SSO launch 流程：你在自己的浏览器里完成登录和 MFA，Moodle 返回一个 `moodlemobile://token=…` 链接，token 就在里面。
-- token 默认 12 周有效，而且和官方 Moodle App 共用同一个。过期，或者在个人资料里点 Mobile app → Log out，都会让它失效。
-- 不使用 privatetoken/autologin，因为那需要冒充 App。User-Agent 如实填写 `lms-mcp/<版本>`。学校是否允许第三方使用 App token，由你判断。
+### 4.2 会话从哪来
 
-### 4.2 获取步骤（M1 前在浏览器里手动做一次，约 2 分钟）
+- **Windows（正式使用，M3 实现）**：
+  - `lms-mcp auth moodle` 用 CDP 打开一个专用 Edge 配置文件（独立的 user-data-dir，不和日常浏览混用）的登录窗口。你完成学校统一登录和 MFA，最好勾选「保持登录」。工具读出会话 cookie 存进凭据管理器，然后关掉窗口。
+  - 平时同步只用 cookie 发普通 HTTP 请求，不开浏览器。每小时一次的同步会顺便刷新 Moodle 会话的空闲计时。
+  - 会话过期时（通常是电脑睡了一夜），先在后台无界面打开同一个配置文件静默续期；统一登录的会话还有效的话不需要你输入。续不上才弹通知，你点一下打开登录窗口（D29）。
+- **云端（开发和验收，D30）**：
+  - 在环境的 API credentials 里加一条：
+    - **Allowed websites** 填 Moodle 域名。
+    - **Custom headers** 的 Name 填 `Cookie`，清空 Prefix，Value 填 `MoodleSession…=<值>`。这个值从浏览器开发者工具 → Application → Cookies 里复制，找名字以 MoodleSession 开头的那条。
+  - 环境变量里加 `MOODLE_AUTH=proxy`。
+  - cookie 不进入云端机器。验收结束后在浏览器里点 Log out，cookie 立即失效。cookie 过期了就删掉这条 credential 重新加，正在运行的会话马上能用上。
+- **日历保底（D31）**：在 Moodle 日历 → Import or export calendars → Export calendar 里，选所有课程和「Recent and next 60 days」，生成链接，放进 `MOODLE_ICAL_URL`（Windows 上存凭据管理器）。这个链接不依赖会话。
 
-1. 确认站点允许，二选一：
-   - 在本机 PowerShell 跑下面的探测命令，不需要登录。期望看到 `enablemobilewebservice` 为 1，`typeoflogin` 为 2 或 3。
-   - 或者开好网络白名单后，由下一个云端会话自己探测。
+### 4.3 数据从哪里取（按访问记录从少到多）
 
-   ```powershell
-   $site = 'https://<你的 Moodle 根地址>'
-   $b = '[{"index":0,"methodname":"tool_mobile_get_public_config","args":{}}]'
-   $r = Invoke-RestMethod -Method Post -ContentType 'application/json' -Body $b -Uri "$site/lib/ajax/service-nologin.php?info=tool_mobile_get_public_config"
-   $r[0].error; $r[0].data | Select-Object typeoflogin,launchurl,enablewebservices,enablemobilewebservice,maintenanceenabled | Format-List
-   ```
+1. **AJAX 接口**：`POST lib/ajax/service.php?sesskey=…`，只调用白名单里的只读函数。候选数据有课程列表、课程结构、日历事件、论坛讨论和帖子、站内通知、成绩。哪些函数可用、各有什么副作用，以 [moodle-session.md](research/moodle-session.md) 和 M1 实测为准。
+2. **文件直链**：`pluginfile.php` 直接条件下载，不触发访问记录。
+3. **日历导出链接**：截止日期。
+4. **页面**（`mod/*/view.php`、成绩页等）：每打开一次就记一次查看，按 D28 尽量少读。从页面里拿到文件直链后记下来，以后直接用直链。
 
-2. 在电脑浏览器里正常登录 Moodle。
-3. 新开一个标签页，访问下面的地址，`passport` 随便填一串数字：
-   `https://<你的 Moodle 根地址>/admin/tool/mobile/launch.php?service=moodle_mobile_app&passport=12345678&urlscheme=moodlemobile&confirmed=1`
-4. 页面会尝试打开 App，如果浏览器弹窗询问，点取消。页面上有一个「click here…」链接，右键 → 复制链接地址，得到 `moodlemobile://token=…`。
-   - 如果报 `pluginnotenabledorconfigured`：先退出 Moodle，再打开第 3 步的地址，在 15 分钟内按提示登录。
-5. 在本机 PowerShell 里解码，这一步不联网：
+### 4.4 只读守卫（由 `internal/moodle` 强制执行）
 
-   ```powershell
-   $link = Read-Host 'paste the moodlemobile:// link'
-   $b64 = [uri]::UnescapeDataString(($link.Trim() -replace '^moodlemobile://token=',''))
-   $parts = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64)) -split ':::'
-   $parts[1]   # 这就是 MOODLE_TOKEN
-   ```
+- 只发 GET。唯一的例外是对 `lib/ajax/service.php` 的 POST，并且 `methodname` 必须在白名单里。白名单在 M1 根据调研和实测定稿，写进本节。
+- 不提交任何表单。不跟随退出链接、带 `sesskey` 的链接，以及编辑、订阅、作答、提交类的 URL。
+- 会打开的页面路径也设白名单，并记录每次打开的原因：首次发现、评分通知、每日检查，或你主动要求。这样可以核对 D28 有没有被遵守。
 
-6. 把 `$parts[1]` 填进云环境变量 `MOODLE_TOKEN`，同时填好 `MOODLE_BASE_URL`。**不要贴进聊天。**
-7. 验收结束后，在 Moodle 个人资料里点 Mobile app → Log out，吊销这个 token。到 M6 再在 Windows 上用 `lms-mcp auth moodle` 重新获取。`auth moodle` 在 M1 是粘贴链接并校验 md5；到 M6 改为注册 HKCU URL 协议处理器，自动接收链接。
+### 4.5 会话失效
 
-### 4.3 备选方案（只在探测显示移动服务关闭时启用，D27）
-
-- **保持登录**：用一个独立的 Edge 配置文件（专用 user-data-dir）保持 Moodle 登录，MFA 时勾选「记住此设备」。
-- **取会话**：同步时用 CDP（`github.com/chromedp/chromedp`，纯 Go）无界面启动这个配置文件，读取会话 Cookie 和 sesskey。
-- **取数据**：有了会话之后，优先通过 `lib/ajax/service.php` 调用白名单里支持 AJAX 的函数；剩下的内容解析网页，复用 v0.3.0 的 HTML 发现代码。
-- **过期**：会话或「记住此设备」过期时弹通知，请你在那个配置文件里重新登录一次。
-- **验收**：这条路径需要交互式 MFA，云端没法真机验收。只能用样本开发，然后在你的 Windows 上验收。
-
-### 4.4 只读函数白名单（由 `internal/moodle` 强制执行）
-
-| 用途 | 函数 |
-|---|---|
-| 公开探测（无需登录） | `tool_mobile_get_public_config` |
-| 站点与课程 | `core_webservice_get_site_info`、`core_enrol_get_users_courses`、`core_course_get_enrolled_courses_by_timeline_classification` |
-| 课件 | `core_course_get_contents`、`core_course_get_updates_since`、`core_course_check_updates`、`mod_resource_get_resources_by_courses`、`mod_folder_get_folders_by_courses`、`mod_page_get_pages_by_courses`、`mod_url_get_urls_by_courses`、`mod_label_get_labels_by_courses`、`mod_book_get_books_by_courses` |
-| 作业与测验 | `mod_assign_get_assignments`、`mod_assign_get_submission_status`、`mod_quiz_get_quizzes_by_courses`、`mod_quiz_get_user_quiz_attempts`、`mod_quiz_get_user_attempts`、`mod_quiz_get_user_best_grade`、`mod_quiz_get_attempt_review` |
-| 论坛与公告 | `mod_forum_get_forums_by_courses`、`mod_forum_get_forum_discussions`、`mod_forum_get_discussion_posts`（会隐式标为已读，D7） |
-| 成绩 | `gradereport_user_get_grade_items`、`gradereport_overview_get_course_grades` |
-| 日历与通知 | `core_calendar_get_action_events_by_timesort`、`core_calendar_get_calendar_upcoming_view`、`core_calendar_get_calendar_events`、`message_popup_get_popup_notifications` |
-
-- 新增函数前，先在这张表里登记并说明它为什么是只读的。
-- 明确禁止：
-  - 任何 `*_view_*` 函数，以及名字含 submit、save、update、set、add、create、delete、mark、send 的函数；
-  - `tool_mobile_get_autologin_key`（冒充 App）；
-  - `tool_mobile_call_external_functions`（批量调用会绕过白名单）；
-  - `core_calendar_get_calendar_export_token`。
-
-### 4.5 token 生命周期
-
-- `doctor` 和每次同步都先调用 `core_webservice_get_site_info`，确认身份、站点版本，以及 `functions[]` 覆盖了白名单。
-- 遇到 `invalidtoken`，或者 `accessexception` 重试一次仍然失败，就判定 token 已失效：
-  - 停止 Moodle 同步，Ed 照常；
-  - 把状态写进 `get_status`；
-  - 弹通知，提示运行 `lms-mcp auth moodle`。
-- 学生看不到 token 的过期时间。所以记录第一次使用的时间，到第 11 周时提前提醒。
+- 被重定向到登录页或 SAML2，或者 AJAX 返回登录类错误，就判定会话已失效。
+- 失效时：
+  - 停止 Moodle 同步。Ed 照常同步，截止日期改由日历链接提供。
+  - 把状态写进 `get_status`。
+  - 按 §4.2 的顺序先尝试续期，续不上再通知你。
 
 ## 5. 测试与样本
 
@@ -364,9 +328,11 @@ internal/anonymize   capture 用的结构保留型脱敏
 
 | 风险 | 影响 | 对策 |
 |---|---|---|
-| 学校关闭了移动服务，或限制通过 SSO 取 token | Moodle 主方案不可用 | M1 先探测；改用 §4.3 的浏览器自动化 |
-| Moodle token 12 周过期，且和官方 App 共用 | 后台同步中断 | 第 11 周提前提醒；失效时弹通知；重新获取约 2 分钟 |
-| 学校是否允许第三方使用 App token | 合规风险 | 由你判断；如实 User-Agent，不冒充 App，只读 |
+| 网页解析依赖主题和页面结构 | 学校改版后部分 Moodle 数据拿不到 | 优先用 AJAX 函数和文件直链；HTML 解析器配样本测试；`doctor` 能检测结构变化 |
+| 几乎每天都要重新登录 | 后台同步每天可能中断一次 | 先在后台静默续期；续不上再通知，点一下就能登录；Ed 和日历保底不受影响 |
+| 统一登录拦截自动化浏览器，或配置文件被占用 | 无法续期 | 用可见窗口登录；配置文件专用，不与日常浏览混用 |
+| Moodle 会话 cookie 等同于账号权限 | 泄露风险 | 存凭据管理器；云端用代理注入；只读守卫禁止表单、退出链接和带 sesskey 的链接 |
+| 会话绑定 IP（`tracksessionip`） | 云端用不了你浏览器里的 cookie | M1 第一件事就是验证；不行就只在 Windows 上做 Moodle 真机验收 |
 | Ed API 处于 beta，可能随时变化 | 同步中断 | 宽松解析字段；`doctor` 能及时发现；用样本做回归测试 |
 | Ed token 等同于密码 | 泄露后风险大 | 存凭据管理器；云端 token 用完吊销；日志脱敏；HTTP 层强制只读 |
 | 读取帖子详情会被记为已读 | Ed 的未读状态失真 | 用户已接受（D7） |
@@ -390,10 +356,8 @@ internal/anonymize   capture 用的结构保留型脱敏
 
 ## 8. 用户待办（开始 M1 前）
 
-1. 新建一个开发专用的 Ed token（Ed → Settings → API Tokens）。
-2. 按 §4.2 的步骤获取 Moodle token。
-3. 编辑云环境：在 claude.ai/code 输入框上方点显示环境名的云图标 → Cloud → 鼠标移到环境上，点齿轮 → Edit cloud environment。
-   - **Network access** 选 **Custom**。**Allowed domains** 每行一个：你的 Moodle 域名、`edstem.org`、`static.au.edusercontent.com`。勾选 **Also include default list of common package managers**，否则 Go 依赖下载不了。改完约一分钟内对已在运行的会话也生效。
-   - **Environment variables**（.env 格式，每行 `KEY=value`）：`MOODLE_BASE_URL`（Moodle 站点根地址）、`MOODLE_TOKEN`、`ED_API_TOKEN`。环境变量只在新会话，或机器闲置后恢复时才会被读取。**不要把 token 贴进聊天。**
-   - 可选，更安全（对话框里出现 **API credentials** 时才有，Pro/Max 才提供）：Ed token 不放环境变量，改用 **Add credential**。**Allowed websites** 填 `edstem.org`，header 保持 `Authorization`、前缀 `Bearer`，**Value** 粘贴 token；然后在环境变量里写 `ED_AUTH=proxy`。这样 token 在代理层注入，不会进入云端机器。Moodle 的 token 放在请求参数里，没法这样处理。
-4. 审阅本计划并合并 M0 PR，然后开新会话开始 M1。
+1. ~~新建开发专用的 Ed token，放进云环境~~（已完成）。
+2. Moodle 会话：按 §4.2，在 API credentials 里加 `Cookie`，并在环境变量里加 `MOODLE_AUTH=proxy`。
+3. 日历链接：按 §4.2 生成，放进环境变量 `MOODLE_ICAL_URL`。
+4. 云环境里不再需要 `MOODLE_TOKEN`，有的话删掉。
+5. 合并 M0 PR，然后开新会话开始 M1。环境变量只在新会话里才会被读取。

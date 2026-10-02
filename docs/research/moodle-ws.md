@@ -1,5 +1,7 @@
 # Moodle Web Services notes (student view)
 
+> **Not usable for this project's site:** a probe on 2026-10-02 showed the mobile web service is disabled and students cannot obtain web-service tokens. lms-mcp uses browser-session access instead; see [moodle-session.md](moodle-session.md). This note stays as reference, for example for the function catalogue.
+
 Research snapshot from 2026-10. Sources: Moodle `main` (5.3dev, older branches diffed), the Moodle app, and moodle-dl. Nothing here was called against a live site.
 
 Confidence: **V** verified in source, **L** likely, **I** inferred.
