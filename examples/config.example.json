@@ -1,0 +1,7 @@
+{
+  "data_dir": "data",
+  "ed": { "enabled": true, "region": "au" },
+  "moodle": { "enabled": true, "base_url": "https://moodle.example.edu" },
+  "exclude": [],
+  "max_file_mb": 200
+}
