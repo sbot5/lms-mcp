@@ -1,50 +1,85 @@
 # Architecture
 
-The repository builds one executable. Internal packages separate network protocols and pure transformations from application policy without introducing a public library API.
+lms-mcp builds one executable that mirrors Ed and Moodle course data into a
+local folder and SQLite index, and serves that index to MCP clients. It is
+strictly read-only toward Ed and Moodle (see `AGENTS.md`). This document
+describes the v1 package layout; the development plan in
+[plan.md](plan.md) is the source of truth for decisions and milestones.
 
 ```text
 cmd/lms-mcp
-    └── internal/app
-          ├── internal/ed
-          ├── internal/moodle
-          ├── internal/render
-          └── internal/filelock
+    └── internal/cli
+          ├── internal/config
+          ├── internal/secrets
+          ├── internal/syncer ── internal/mcpserver ── internal/notify
+          │        └── internal/store · internal/files · internal/extract
+          │        └── internal/ed · internal/moodle · internal/render
+          └── internal/anonymize
+internal/ed · internal/moodle ──> internal/httpx
 ```
 
-Providers never import `app` or each other. `render` and `filelock` do not import providers. Shared configuration, export records, checkpoint schemas and commit ordering remain in `app`, because they describe the local application rather than a remote service.
+Dependency direction: `cmd` → `cli` → orchestration (`syncer`, `mcpserver`,
+`notify`) → local engines (`store`, `files`, `extract`, `render`) and provider
+clients (`ed`, `moodle`) → the shared HTTP layer (`httpx`). Provider packages
+never import `cli`, the orchestration layer, or each other.
 
 | Package | Responsibility |
 | --- | --- |
-| `cmd/lms-mcp` | OS signals, standard streams and process exit status. Calls `app.Run`. |
-| `internal/app` | Parse arguments/configuration, load private credential files, wire clients, implement MCP handlers, select content, render files, query status and commit checkpoints. |
-| `internal/ed` | Ed HTTP authentication, retries, pagination and response models. Accepts a token and an optional HTTP transport; no filesystem access. |
-| `internal/moodle` | Site-scoped HTTP requests, token/Cookie handling, supported HTML discovery and iCalendar parsing. Accepts already-loaded credentials; no configuration-file access. |
-| `internal/render` | Convert Ed XML into Markdown, redact mention tags, escape Markdown and collect asset URLs. Network allowlisting stays in `app`. |
-| `internal/filelock` | Acquire platform-specific process locks; callers own and close the returned file. |
+| `cmd/lms-mcp` | OS signals, standard streams, exit status. Calls `cli.Run`. |
+| `internal/cli` | Parse subcommands and flags, wire configuration, credentials, clients, store and the MCP server, and print terminal output. In `mcp` mode stdout carries the protocol only. |
+| `internal/config` | Load and validate `config.json`; resolve the data directory; pair Ed and Moodle courses by code; `MOODLE_BASE_URL` enables Moodle. Holds no credentials. |
+| `internal/secrets` | Named credentials. Windows Credential Manager, or read-only environment variables elsewhere and in cloud development. `ED_AUTH`/`MOODLE_AUTH=proxy` mark proxy-injected headers. Values are never logged. |
+| `internal/httpx` | The shared HTTP layer. Enforces the read-only invariant in the transport via a `Guard` (`EdGuard`: GET to Ed hosts only; `MoodleGuard`: a page/file allowlist plus AJAX POSTs whose methodnames are allowlisted, verified by parsing the batch). Adds a stable User-Agent, per-host rate limiting, bounded 429/5xx retries, and redacts request URLs from errors. |
+| `internal/ed` | Ed API client over `httpx`. GET only; token optional (proxy mode sends no Authorization header). Response models for user, threads, lessons, resources. |
+| `internal/moodle` | Moodle browser-session client over `httpx`: the unauthenticated public-config probe, sesskey retrieval, allowlisted AJAX calls, page and file reads, and iCalendar parsing. Also retains the earlier HTML discovery helpers. |
+| `internal/render` | Convert Ed XML and Moodle HTML to Markdown; collect asset URLs; escape and redact. No network. |
+| `internal/store` | SQLite (WAL) index: schema and migrations, items/files/grades/deadlines/events, FTS5 search, sync runs and cross-process leases. No knowledge of provider HTTP. |
+| `internal/files` | Mirror materials to disk: streaming downloads, atomic replace, the per-file size cap, and video-as-link. (M3) |
+| `internal/extract` | Per-page text extraction from PDF, PPTX, DOCX, ipynb and HTML, cached by content hash. (M4) |
+| `internal/syncer` | Orchestrate a sync: discover and pair courses, run each provider incrementally, detect changes and emit events. Owns the async job (lease, goroutine, progress). |
+| `internal/notify` | Notification rules, aggregation and Windows toasts. (M6) |
+| `internal/mcpserver` | MCP tools, resources and prompts, plus pagination, opaque cursors and output budgeting. Every tool is read-only. |
+| `internal/anonymize` | Structure-preserving redaction for the `capture` command's fixtures. |
+| `internal/filelock` | Platform process locks (retained from v0.3.0). |
 
-## Application organization
+## Read-only invariant
 
-- `cli.go`, `ed_commands.go`, `setup.go`, `status.go`: command dispatch, terminal output, setup and local queries.
-- `config.go`, `moodle_config.go`, `env.go`, `clients.go`: configuration normalization, credentials and provider construction.
-- `mcp.go`, `version.go`: MCP registration and the shared application version.
-- `sync.go`, `ed_lessons.go`, `ed_records.go`, `moodle_sync.go`, `moodle_calendar.go`: provider orchestration, exported content and calendar cache queries.
-- `storage.go`: hashes, safe output paths, atomic writes, backups, local-edit conflicts and the durable recovery journal.
-- `*_test.go`: synthetic HTTP/filesystem/MCP integration tests alongside the application that coordinates them. Test servers use loopback and temporary directories; no live credentials are required.
+Read-only is enforced in three layers: by convention in the provider clients,
+by the `httpx` guards at the transport (every request is checked before it is
+sent, and the Moodle AJAX allowlist is verified by parsing the request body),
+and by never constructing side-effecting requests in the first place. A plain
+GET of Ed thread details or Moodle forum posts may still update the platform's
+own read state; this is accepted (plan D7). "New" content is decided by
+lms-mcp's own change detection, not the platform's unread flags.
 
-## Synchronization flow
+## Local data
 
-1. Load and validate configuration. Resolve relative paths against its location.
-2. Construct clients from private credentials and lock one course's output folder.
-3. Read the successful checkpoint, fetch changed data and prepare complete output.
-4. Check local edits, save a recovery journal, back up replaced files and atomically replace each output.
-5. Commit the new checkpoint only after that course's outputs succeed. Report individual failures and continue other courses.
+```text
+<data dir>/
+  lms.db (+ -wal, -shm)   metadata, bodies, extracted text, FTS, events, runs
+  logs/                   sync logs (no credentials, no token-bearing URLs)
+  <CODE>-<TERM>/          per course
+    ed/lessons/… ed/resources/…
+    moodle/<section>/…
+```
 
-Moving files into Go packages does not change command names, JSON field names, output ownership or checkpoint formats. Existing private configurations do not need migration. The root module is no longer an executable target: build `./cmd/lms-mcp`, or use `scripts/build.ps1`.
+Discussion posts, announcements, grades and deadlines live in SQLite and are
+rendered to Markdown by tools. Materials and attachments are written to disk so
+Claude Code can open the originals. A remote deletion marks the index row
+removed; it never deletes the local copy.
 
-## Repository and runtime data
+## Credentials and cloud development
 
-`examples/` contains synthetic templates only. `docs/` contains guides and versioned release notes. `scripts/` owns build, verification, packaging and optional Windows scheduling. `bin/` and `dist/` are ignored generated output. Tokens, user configuration, downloaded material, checkpoints, logs and backups belong outside the repository.
+Credentials never live in the repository. On Windows they are stored in
+Credential Manager; in a cloud development session they come from environment
+variables, or from the environment's API-credential proxy (`ED_AUTH=proxy`,
+`MOODLE_AUTH=proxy`), which injects the Authorization or Cookie header after a
+request leaves the sandbox so the secret never enters it. The Moodle site URL
+is supplied by `MOODLE_BASE_URL` (or local config) and is not committed.
 
-Source builds go into `bin/`. Release archives keep the binary at the archive root and retain `examples/`, `docs/` and the two scheduling scripts. The task installer handles either layout. Development work does not replace an existing installed instance automatically.
+## Concurrency
 
-Moodle remains a development preview pending live-site acceptance; package separation and offline CI do not establish site coverage. See [Moodle validation](moodle.md).
+The MCP server, a scheduled sync and an interactive command may each run as a
+separate process against the same database. The store opens SQLite in WAL mode
+with a busy timeout; a sync holds a cross-process lease so only one runs at a
+time. Read tools serve the index and never sync implicitly.
