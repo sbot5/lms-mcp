@@ -8,97 +8,61 @@ import (
 	"io"
 	"net/http"
 	"slices"
-	"sync"
-	"time"
+
+	"github.com/sbot5/lms-mcp/internal/httpx"
 )
 
-const edBaseURL = "https://edstem.org/api"
+// RegionHost maps a region code to the Ed API host.
+func RegionHost(region string) string {
+	switch region {
+	case "us":
+		return "us.edstem.org"
+	case "eu":
+		return "eu.edstem.org"
+	default:
+		return "edstem.org"
+	}
+}
 
+// Client talks to the Ed API through the shared read-only HTTP layer.
 type Client struct {
-	token       string
-	hc          *http.Client
-	mu          sync.Mutex
-	lastRequest time.Time
+	doer  *httpx.Client
+	base  string // e.g. https://edstem.org/api
+	token string // "" when the agent proxy injects Authorization (ED_AUTH=proxy)
 }
 
-func NewClient(token string, transport http.RoundTripper) *Client {
-	return &Client{token: token, hc: &http.Client{Timeout: 30 * time.Second, Transport: transport, CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }}}
+// NewClient builds an Ed client against baseURL (e.g. https://edstem.org/api).
+// doer must already enforce EdGuard. token may be empty, in which case no
+// Authorization header is sent and the agent proxy is expected to add it.
+func NewClient(doer *httpx.Client, baseURL, token string) *Client {
+	return &Client{doer: doer, base: baseURL, token: token}
 }
 
-// get requests edBaseURL+path and decodes the JSON response into out, which must be a pointer.
+// APIBaseURL is the Ed API base URL for a region code.
+func APIBaseURL(region string) string {
+	return "https://" + RegionHost(region) + "/api"
+}
+
+// Get requests base+path and decodes the JSON response into out (a pointer).
+// Rate limiting and 429/5xx retries happen in the httpx layer.
 func (c *Client) Get(ctx context.Context, path string, out any) error {
-	for attempt := 0; attempt < 4; attempt++ {
-		err := c.getOnce(ctx, path, out)
-		if err == nil {
-			return nil
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		e, ok := err.(*edHTTPError)
-		if !ok || (e.status != 429 && e.status < 500) || attempt == 3 {
-			return err
-		}
-		delay := time.Second * time.Duration(1<<attempt)
-		if e.retryAfter > delay {
-			delay = e.retryAfter
-		}
-		if delay > 5*time.Minute {
-			return err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
-	return fmt.Errorf("retry exhausted")
-}
-
-type edHTTPError struct {
-	path       string
-	status     int
-	retryAfter time.Duration
-}
-
-func (e *edHTTPError) Error() string {
-	return fmt.Sprintf("GET %s: HTTP %d %s", e.path, e.status, http.StatusText(e.status))
-}
-
-func (c *Client) getOnce(ctx context.Context, path string, out any) error {
-	c.mu.Lock()
-	delay := time.Until(c.lastRequest.Add(100 * time.Millisecond))
-	if delay > 0 {
-		select {
-		case <-ctx.Done():
-			c.mu.Unlock()
-			return ctx.Err()
-		case <-time.After(delay):
-		}
-	}
-	c.lastRequest = time.Now()
-	c.mu.Unlock()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, edBaseURL+path, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
-		return fmt.Errorf("GET %s: %w", path, err)
+		return fmt.Errorf("GET %s: bad request", path)
 	}
-	req.Header.Set("Authorization", "Bearer "+c.token)
-
-	resp, err := c.hc.Do(req)
+	if c.token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.token)
+	}
+	resp, err := c.doer.Do(req)
 	if err != nil {
-		return err // already reads `Get "<url>": <cause>`, and the URL holds no token
+		return err // httpx already redacts the URL
 	}
 	defer resp.Body.Close()
-
 	if resp.StatusCode != http.StatusOK {
-		delay, _ := time.ParseDuration(resp.Header.Get("Retry-After") + "s")
-		if when, err := http.ParseTime(resp.Header.Get("Retry-After")); err == nil {
-			delay = time.Until(when)
-		}
-		return &edHTTPError{path, resp.StatusCode, delay}
+		return fmt.Errorf("GET %s: HTTP %d", path, resp.StatusCode)
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(out); err != nil {
-		return fmt.Errorf("GET %s: decode: %w", path, err)
+		return fmt.Errorf("GET %s: decode failed", path)
 	}
 	return nil
 }
