@@ -164,9 +164,8 @@ internal/anonymize   capture 用的结构保留型脱敏
 ### M1 新骨架（能连上、能存储、能被调用）
 
 1. 删除 v0.3.0 的同步、导出和存储代码（`internal/app` 里的 storage、sync、ed_lessons、ed_records、moodle_sync、setup，旧计划任务脚本）。保留可复用的 `internal/ed`、`internal/render`，以及 Moodle 的 Cookie 请求、HTML 发现和 iCal 解析代码，在 M1/M3 里改造。
-2. 新建 `config`、`secrets`（`github.com/danieljoos/wincred`；没有凭据管理器时读环境变量；`ED_AUTH=proxy` 时 Ed 请求不带 Authorization 头，由云环境的 API credential 在代理层注入）、`httpx`（含只读守卫：Ed 只允许 GET；Moodle 只允许对 `/webservice/rest/server.php` 调用白名单函数和下载 pluginfile）。
-3. `store`：建立 schema v1 和迁移框架，开启 WAL，实现租约。
-4. 新增命令：
+2. 新建 `config`、`secrets`、`httpx`、`store`。各包的精确接口和固定依赖版本见 [M1 契约](dev/m1-contracts.md)。`httpx` 含只读守卫：Ed 只允许 GET；Moodle 按 §4.4 的白名单。`secrets` 在 Windows 用凭据管理器，其他环境和云端读环境变量；`ED_AUTH`/`MOODLE_AUTH=proxy` 时对应请求不带凭证头，由云环境代理注入。
+3. 新增命令：
    - `auth ed`：隐藏输入粘贴 token，存进凭据管理器。
    - `auth moodle`：M1 只支持读取环境变量或代理注入的会话（云端开发用）。Windows 上用 Edge 配置文件登录放到 M3。
    - `auth status`：只显示是否已配置，不显示值。
@@ -177,9 +176,9 @@ internal/anonymize   capture 用的结构保留型脱敏
      - 日历导出链接能否读取。
      对应的单次检查见 [moodle-session.md](research/moodle-session.md) 的 Open questions。
    - `capture`：采集脱敏样本，见 §5。
-5. MCP 框架：工具注册约定、输出预算、cursor 编码、错误文案、同步任务框架（租约、goroutine、进度），以及 `list_courses`、`sync_start`、`sync_status`、`get_status`。
-6. CI 精简为 ubuntu 和 windows 两个平台，Go 版本保留 1.25.x 和 stable。
-7. 重写 README、`docs/architecture.md`，删掉 `docs/moodle.md` 等过时文档。
+4. MCP 框架：工具注册约定、输出预算、cursor 编码、错误文案、同步任务框架（租约、goroutine、进度），以及 `list_courses`、`sync_start`、`sync_status`、`get_status`。
+5. CI 精简为 ubuntu 和 windows 两个平台，Go 版本保留 1.25.x 和 stable。
+6. 重写 README、`docs/architecture.md`，删掉 `docs/moodle.md` 等过时文档。
 
 验收：
 - 离线：gofmt、vet、test 全部通过；Windows 交叉编译成功；用内存传输的 MCP 集成测试检查工具列表、注解和输出结构。
