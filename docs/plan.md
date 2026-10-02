@@ -50,8 +50,8 @@
 | D25 | Moodle 认证 | ~~App 同款 token~~ 不可行：2026-10-02 探测显示学校关闭了移动服务（`enablemobilewebservice=0`，`typeoflogin=1`，SAML2 登录，Moodle 4.5–5.1），学生也拿不到其他 Web Service token。改为浏览器会话方案（D27） | 探测 |
 | D26 | 公开仓库 | 仓库保持公开，但提交的任何内容（文档、样本、测试、提交信息）都不出现学校名、Moodle 域名或其他能识别用户的信息 | 用户 |
 | D27 | Moodle 会话 | 主方案：只在登录时用一个独立的 Edge 配置文件（CDP 驱动），读出会话 cookie 存进凭据管理器。平时同步只用 cookie 加 sesskey 发普通 HTTP 请求，不开浏览器。见 §4 | 用户 |
-| D28 | 访问记录 | 接受 Moodle 记录「已查看」，并可能自动勾选「查看即完成」，但要尽量少触发：课件只在第一次下载时打开一次页面，之后直接用文件链接；成绩页只在收到评分通知时或每天读一次；作业和测验页只在新出现或你问到时读 | 用户 |
-| D29 | 重新登录 | 你几乎每天都要重新输 学校统一登录的密码和 MFA。会话过期时，先用那个 Edge 配置文件在后台静默续期；续不上再弹通知，你点一下完成登录。登录过期期间 Ed 照常同步，截止提醒靠 D31 | 用户 |
+| D28 | 访问记录 | 接受 Moodle 记录「已查看」，并可能自动勾选「查看即完成」，但要尽量少触发：课件只在第一次下载时打开一次页面，之后直接用文件链接。成绩页只在检测到成绩变化（`get_updates_since` 或评分通知）时读，另外每天读一次总览作保底；如果站点是 5.1，改用 AJAX 概览接口，不读页面。作业和测验页只在新出现或你问到时读。细节见 §4.3 | 用户 |
+| D29 | 重新登录 | 你几乎每天都要重新输入学校统一登录的密码和 MFA。会话过期时，先用那个 Edge 配置文件在后台静默续期；续不上再弹通知，你点一下完成登录。登录过期期间 Ed 照常同步，截止提醒靠 D31 | 用户 |
 | D30 | 云端 Moodle 会话 | 云端开发用环境的 API credentials 注入 `Cookie` 头，cookie 不进入云端机器。环境变量设 `MOODLE_AUTH=proxy`。验收结束后在浏览器里点 Log out，cookie 立即失效 | 用户 |
 | D31 | 日历保底 | 用 Moodle 日历导出链接（`MOODLE_ICAL_URL`，长期有效、只能读日历）给截止日期做保底，不依赖登录状态 | 用户 |
 
@@ -170,7 +170,12 @@ internal/anonymize   capture 用的结构保留型脱敏
    - `auth ed`：隐藏输入粘贴 token，存进凭据管理器。
    - `auth moodle`：M1 只支持读取环境变量或代理注入的会话（云端开发用）。Windows 上用 Edge 配置文件登录放到 M3。
    - `auth status`：只显示是否已配置，不显示值。
-   - `doctor`：检查凭证、连通性、身份和课程发现；Moodle 部分还要检查会话是否有效、能否拿到 sesskey、白名单里哪些 AJAX 函数可用，以及日历导出链接能否读取。
+   - `doctor`：检查凭证、连通性、身份和课程发现。Moodle 部分还要检查：
+     - 会话是否有效、能否拿到 sesskey；
+     - 站点版本（5.1、5.0 还是 4.5）；
+     - section 片段能否使用、整门课打包下载是否开启；
+     - 日历导出链接能否读取。
+     对应的单次检查见 [moodle-session.md](research/moodle-session.md) 的 Open questions。
    - `capture`：采集脱敏样本，见 §5。
 5. MCP 框架：工具注册约定、输出预算、cursor 编码、错误文案、同步任务框架（租约、goroutine、进度），以及 `list_courses`、`sync_start`、`sync_status`、`get_status`。
 6. CI 精简为 ubuntu 和 windows 两个平台，Go 版本保留 1.25.x 和 stable。
@@ -206,13 +211,13 @@ internal/anonymize   capture 用的结构保留型脱敏
 
 - Windows 上的 `auth moodle`：用 CDP 打开专用 Edge 配置文件的登录窗口，读取会话 cookie 存进凭据管理器；会话过期时先在后台静默续期，失败才通知你（D27、D29）。打预发布版 `v1.0.0-m3`，由你在 Windows 上验收这一项。
 - Moodle 侧的课程发现与配对。
-- 取各节和活动（具体接口见 §4.3）：
+- 按 §4.3 取各节和活动：
   - resource 和 folder 的文件做条件下载（流式、受大小上限约束、视频只留链接）。
   - page、book、label 转 Markdown，包括其中嵌入的文件。
   - url 只保留链接。
   - 下载活动简介里的附件。
   - 其他活动（assign、quiz、forum、lesson 等）先登记为条目，详情放到 M5。
-- 增量：对比课程结构快照，再结合文件的 ETag 和 Last-Modified。按 D28，同一个活动的页面只在第一次发现时打开。
+- 增量：`core_course_get_updates_since` 给出变化的活动，再结合文件的 ETag 和 Last-Modified。按 D28，同一个活动的页面只在第一次发现时打开。
 - MCP：`list_materials` 和 `read_material` 覆盖 Moodle，`whats_new` 加入 Moodle 资料事件。
 
 验收：
@@ -282,33 +287,67 @@ internal/anonymize   capture 用的结构保留型脱敏
 ### 4.2 会话从哪来
 
 - **Windows（正式使用，M3 实现）**：
-  - `lms-mcp auth moodle` 用 CDP 打开一个专用 Edge 配置文件（独立的 user-data-dir，不和日常浏览混用）的登录窗口。你完成学校统一登录和 MFA，最好勾选「保持登录」。工具读出会话 cookie 存进凭据管理器，然后关掉窗口。
-  - 平时同步只用 cookie 发普通 HTTP 请求，不开浏览器。每小时一次的同步会顺便刷新 Moodle 会话的空闲计时。
-  - 会话过期时（通常是电脑睡了一夜），先在后台无界面打开同一个配置文件静默续期；统一登录的会话还有效的话不需要你输入。续不上才弹通知，你点一下打开登录窗口（D29）。
+  - **登录**：`lms-mcp auth moodle` 用 chromedp 启动 Edge（`ExecPath` 指向 msedge.exe，专用 `UserDataDir`，不和日常浏览混用），打开一个有界面的登录窗口。你完成学校统一登录和 MFA，记得勾选「保持登录 / Stay signed in」，否则每次浏览器重启都要重新过 MFA。工具通过 CDP 读出会话 cookie（HttpOnly 也能读），存进凭据管理器，然后正常关闭窗口。
+  - **平时同步**：只用 cookie 加 sesskey 发普通 HTTP 请求，不开浏览器。Moodle 会话是滑动过期（默认 8 小时，实际值从 `M.cfg.sessiontimeout` 读取），所以电脑开着时，每小时一次的同步会让会话一直有效。
+  - **会话过期**（通常是电脑睡了一夜）：
+    1. 先用同一个配置文件打开一个最小化的有界面窗口。不用无界面模式，因为它会暴露自动化特征，还可能触发安全软件。
+    2. 访问 auth_saml2 的 `passive=on` 登录地址静默续期。统一登录的会话还有效时，不需要你做任何操作。
+    3. 如果停在统一登录的输入框，或者 20 秒没有进展，就弹通知。你点一下，窗口恢复显示，你登录即可（D29）。
 - **云端（开发和验收，D30）**：
   - 在环境的 API credentials 里加一条：
     - **Allowed websites** 填 Moodle 域名。
     - **Custom headers** 的 Name 填 `Cookie`，清空 Prefix，Value 填 `MoodleSession…=<值>`。这个值从浏览器开发者工具 → Application → Cookies 里复制，找名字以 MoodleSession 开头的那条。
   - 环境变量里加 `MOODLE_AUTH=proxy`。
-  - cookie 不进入云端机器。验收结束后在浏览器里点 Log out，cookie 立即失效。cookie 过期了就删掉这条 credential 重新加，正在运行的会话马上能用上。
+  - cookie 不进入云端机器。验收结束后在浏览器里点 Log out，cookie 立即失效。cookie 过期了就删掉这条 credential 重新加，然后开一个新会话。在已经运行的会话里加 credential 试过，没有生效。
 - **日历保底（D31）**：直接打开 `<Moodle 根地址>/calendar/export.php`（学校主题把日历页上的入口藏起来了，但导出功能是开着的，2026-10-02 已确认）。选全部事件和「Recent and next 60 days」，点 Get calendar URL，把链接放进 `MOODLE_ICAL_URL`（Windows 上存凭据管理器）。这个链接不依赖会话。
 
-### 4.3 数据从哪里取（按访问记录从少到多）
+### 4.3 数据从哪里取（依据 [moodle-session.md](research/moodle-session.md)）
 
-1. **AJAX 接口**：`POST lib/ajax/service.php?sesskey=…`，只调用白名单里的只读函数。候选数据有课程列表、课程结构、日历事件、论坛讨论和帖子、站内通知、成绩。哪些函数可用、各有什么副作用，以 [moodle-session.md](research/moodle-session.md) 和 M1 实测为准。
-2. **文件直链**：`pluginfile.php` 直接条件下载，不触发访问记录。
-3. **日历导出链接**：截止日期。
-4. **页面**（`mod/*/view.php`、成绩页等）：每打开一次就记一次查看，按 D28 尽量少读。从页面里拿到文件直链后记下来，以后直接用直链。
+AJAX 指 `POST lib/ajax/service.php?sesskey=…`。AJAX 调用不记录任何事件，也不更新「最后访问」时间。
+
+| 数据 | 取法 | 访问记录 |
+|---|---|---|
+| 会话自检、sesskey | GET `/user/preferences.php`，从 `M.cfg` 里读 | 无 |
+| 课程列表 | AJAX `core_course_get_enrolled_courses_by_timeline_classification` | 无 |
+| 课程结构（节和活动） | AJAX `core_courseformat_get_state`。活动简介、内嵌文件夹的文件链接从 `core_get_fragment` 的 section 片段取 | 无 |
+| 增量变化 | AJAX `core_course_get_updates_since`：第一次 `since=0`，之后传上次同步时间，只重取有变化的活动 | 无 |
+| 文件夹里的文件 | 片段里的 pluginfile 直链 | 无 |
+| resource 文件 | 第一次请求 `mod/resource/view.php?id=N&redirect=1`，不跟随跳转，从 Location 记下 pluginfile 直链。之后都用直链条件下载；只有 `contentfiles` 变了才重新取直链 | 首次一次 |
+| page、book 正文 | 第一次打开一次页面，记下模块 context id。之后用 `pluginfile.php/{ctx}/mod_page/content/index.html` 和 `…/mod_book/chapter/{id}/index.html` | 首次一次 |
+| 整门课打包 | 如果站点开了 `course/downloadcontent.php`，优先用它 | 无 |
+| 截止日期、是否待提交 | AJAX `core_calendar_get_action_events_by_timesort`，加日历导出链接（D31） | 无 |
+| 论坛与公告 | 讨论 id 从 `get_updates_since` 取，帖子用 AJAX `mod_forum_get_discussion_posts` | 无。5.0 以上且你开了论坛跟踪时会标已读（D7） |
+| 站内通知与私信 | AJAX `message_popup_get_popup_notifications`、`core_message_get_conversations`、`core_message_get_conversation_messages` | 无，不会标已读 |
+| 成绩 | 5.1：AJAX `core_courseformat_get_overview_information`。更早的版本：`get_updates_since` 的 `gradeitems` 或评分通知显示有变化时，读该课程的成绩页；每天读一次总览成绩页作保底 | 有变化时每门课一次，加每天一次 |
+| 作业要求 | 新出现时读一次作业页 | 首次一次 |
+| 反馈文件、测验回顾、URL 目标 | 只在你问到时读 | 按需 |
 
 ### 4.4 只读守卫（由 `internal/moodle` 强制执行）
 
-- 只发 GET。唯一的例外是对 `lib/ajax/service.php` 的 POST，并且 `methodname` 必须在白名单里。白名单在 M1 根据调研和实测定稿，写进本节。
-- 不提交任何表单。不跟随退出链接、带 `sesskey` 的链接，以及编辑、订阅、作答、提交类的 URL。
-- 会打开的页面路径也设白名单，并记录每次打开的原因：首次发现、评分通知、每日检查，或你主动要求。这样可以核对 D28 有没有被遵守。
+- **AJAX 白名单**（只有这些 `methodname` 可以 POST）：
+  - `core_course_get_enrolled_courses_by_timeline_classification`、`core_courseformat_get_state`、`core_course_get_updates_since`、`core_course_check_updates`
+  - `core_calendar_get_action_events_by_timesort`、`core_calendar_get_calendar_upcoming_view`
+  - `core_get_fragment`：只允许 component 为 `core_courseformat`，且 callback 为 `section` 或 `cmitem`
+  - `core_courseformat_get_overview_information`、`mod_forum_get_discussion_posts`
+  - `message_popup_get_popup_notifications`、`core_message_get_conversations`、`core_message_get_conversation_messages`、`core_session_time_remaining`
+- **页面和文件路径白名单**（只发 GET，默认不跟随跳转）：
+  - 读 `M.cfg`：`/user/preferences.php`、`/calendar/export.php?course=…`
+  - 文件：`/pluginfile.php/…`、`/course/downloadcontent.php`
+  - 按 §4.3 和 D28 的条件打开：`/mod/resource/view.php?…&redirect=1`、`/mod/page/view.php`、`/mod/book/tool/print/index.php`、`/mod/assign/view.php`、`/mod/quiz/view.php`、`/mod/url/view.php`、`/grade/report/user/index.php`、`/grade/report/overview/index.php`
+  - 日历导出链接：`/calendar/export_execute.php`，请求时不带 cookie
+- **禁止**：
+  - 不在白名单里的任何路径；
+  - 任何表单提交；
+  - `/login/logout.php`；
+  - 带 `sesskey` 的 GET；
+  - 编辑、订阅、作答、提交类 URL。
+- 每次打开会留访问记录的页面时，记录原因（首次发现、成绩变化、每日保底、你主动要求），方便核对 D28。
 
 ### 4.5 会话失效
 
-- 被重定向到登录页或 SAML2，或者 AJAX 返回登录类错误，就判定会话已失效。
+- 判定会话失效的信号：
+  - AJAX 返回 `servicerequireslogin`。遇到 `invalidsesskey` 时先重新取一次 sesskey 再试，仍然失败才算失效。
+  - 页面或文件请求返回 3xx，跳到 `/login/`、`/auth/saml2/` 或其他主机。
 - 失效时：
   - 停止 Moodle 同步。Ed 照常同步，截止日期改由日历链接提供。
   - 把状态写进 `get_status`。
@@ -331,7 +370,8 @@ internal/anonymize   capture 用的结构保留型脱敏
 |---|---|---|
 | 网页解析依赖主题和页面结构 | 学校改版后部分 Moodle 数据拿不到 | 优先用 AJAX 函数和文件直链；HTML 解析器配样本测试；`doctor` 能检测结构变化 |
 | 几乎每天都要重新登录 | 后台同步每天可能中断一次 | 先在后台静默续期；续不上再通知，点一下就能登录；Ed 和日历保底不受影响 |
-| 统一登录拦截自动化浏览器，或配置文件被占用 | 无法续期 | 用可见窗口登录；配置文件专用，不与日常浏览混用 |
+| 统一登录拦截自动化浏览器，或配置文件被占用 | 无法续期 | 不用无界面模式，改用最小化的有界面窗口；配置文件专用，不与日常浏览混用；被占用时连接已在运行的实例 |
+| 每小时同步让 Moodle 会话一直不过期 | 政策层面的灰色地带 | 和开着 Moodle 页面的效果相同；只读，访问记录尽量少（D28） |
 | Moodle 会话 cookie 等同于账号权限 | 泄露风险 | 存凭据管理器；云端用代理注入；只读守卫禁止表单、退出链接和带 sesskey 的链接 |
 | 会话绑定 IP（`tracksessionip`） | 云端用不了你浏览器里的 cookie | M1 第一件事就是验证；不行就只在 Windows 上做 Moodle 真机验收 |
 | Ed API 处于 beta，可能随时变化 | 同步中断 | 宽松解析字段；`doctor` 能及时发现；用样本做回归测试 |
