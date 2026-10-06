@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"path"
@@ -21,15 +22,40 @@ func (g EdGuard) Check(req *http.Request) error {
 	if req.Method != http.MethodGet {
 		return fmt.Errorf("read-only: Ed allows only GET, not %s", req.Method)
 	}
+	if !safeRequestURL(req.URL) {
+		return fmt.Errorf("read-only: Ed requires HTTPS and a URL without embedded credentials")
+	}
+	q, err := url.ParseQuery(req.URL.RawQuery)
+	if err != nil {
+		return fmt.Errorf("read-only: invalid Ed request query")
+	}
+	if _, ok := q["view"]; ok {
+		return fmt.Errorf("read-only: Ed lesson progress requests were refused")
+	}
 	h := strings.ToLower(req.URL.Hostname())
 	if h == strings.ToLower(g.APIHost) {
 		return nil
 	}
 	// Attachments live on static.<region>.edusercontent.com.
-	if strings.HasSuffix(h, ".edusercontent.com") || h == "edusercontent.com" {
+	if h == "static.au.edusercontent.com" || h == "static.us.edusercontent.com" || h == "static.eu.edusercontent.com" {
+		if req.Header.Get("Authorization") != "" || req.Header.Get("Cookie") != "" || req.Header.Get("Proxy-Authorization") != "" {
+			return fmt.Errorf("read-only: API credentials must not be sent to attachment hosts")
+		}
 		return nil
 	}
 	return fmt.Errorf("read-only: Ed request to an unexpected host was refused")
+}
+
+// Loopback HTTP is allowed for offline fixtures; real credentials require TLS.
+func safeRequestURL(u *url.URL) bool {
+	if u == nil || u.User != nil || u.Hostname() == "" {
+		return false
+	}
+	if u.Scheme == "https" {
+		return true
+	}
+	ip := net.ParseIP(u.Hostname())
+	return u.Scheme == "http" && (u.Hostname() == "localhost" || (ip != nil && ip.IsLoopback()))
 }
 
 // MoodleAllowedMethods is the read-only AJAX allowlist (plan §4.4). Only these
@@ -92,6 +118,9 @@ type MoodleGuard struct {
 
 func (g MoodleGuard) Check(req *http.Request) error {
 	u := req.URL
+	if !safeRequestURL(u) || g.Base == nil {
+		return fmt.Errorf("read-only: Moodle requires HTTPS and a URL without embedded credentials")
+	}
 	if !SameHost(u, g.Base.Scheme, g.Base.Host) {
 		return fmt.Errorf("read-only: Moodle request outside the configured site was refused")
 	}
@@ -103,7 +132,11 @@ func (g MoodleGuard) Check(req *http.Request) error {
 
 	switch req.Method {
 	case http.MethodGet:
-		if u.Query().Get("sesskey") != "" {
+		q, err := url.ParseQuery(u.RawQuery)
+		if err != nil {
+			return fmt.Errorf("read-only: invalid Moodle request query")
+		}
+		if _, ok := q["sesskey"]; ok {
 			return fmt.Errorf("read-only: a GET carrying sesskey was refused")
 		}
 		if g.allowedGet(clean, basePath) {
@@ -127,7 +160,7 @@ func (g MoodleGuard) Check(req *http.Request) error {
 func (g MoodleGuard) allowedGet(clean, basePath string) bool {
 	rel := trimBase(clean, basePath)
 	for _, r := range moodleGetPaths {
-		if r.exact && rel == r.suffix {
+		if r.exact && rel == path.Clean(r.suffix) {
 			return true
 		}
 		if !r.exact && strings.HasPrefix(rel, r.suffix) {
@@ -161,9 +194,9 @@ func checkAjaxBody(req *http.Request, allowed map[string]bool) error {
 	if err != nil {
 		return fmt.Errorf("read-only: could not read the AJAX body")
 	}
-	var calls []struct {
-		MethodName string `json:"methodname"`
-	}
+	// Moodle reads the exact lowercase key. Decoding into a Go struct would
+	// also accept METHODNAME, so an alias could hide the actual method sent.
+	var calls []map[string]json.RawMessage
 	if err := json.Unmarshal(b, &calls); err != nil {
 		return fmt.Errorf("read-only: AJAX body was not a recognizable batch")
 	}
@@ -171,8 +204,14 @@ func checkAjaxBody(req *http.Request, allowed map[string]bool) error {
 		return fmt.Errorf("read-only: empty AJAX batch was refused")
 	}
 	for _, c := range calls {
-		if !allowed[c.MethodName] {
-			return fmt.Errorf("read-only: AJAX method %q is not on the allowlist", c.MethodName)
+		for key := range c {
+			if key != "methodname" && strings.EqualFold(key, "methodname") {
+				return fmt.Errorf("read-only: ambiguous AJAX method field was refused")
+			}
+		}
+		var method string
+		if err := json.Unmarshal(c["methodname"], &method); err != nil || !allowed[method] {
+			return fmt.Errorf("read-only: AJAX method is not on the allowlist")
 		}
 	}
 	return nil

@@ -135,8 +135,10 @@ func TestSyncStartStatus(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	if job.Phase != "done" {
-		t.Fatalf("sync did not finish: %+v", job)
+	// This fixture deliberately has no providers. The completed background job
+	// must expose a failure in structuredContent rather than report a false success.
+	if job.Phase != "error" || job.Message != "no sync providers are available" {
+		t.Fatalf("missing provider failure in structuredContent: %+v", job)
 	}
 }
 

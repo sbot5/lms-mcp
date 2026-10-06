@@ -160,10 +160,11 @@ type SessionCourse struct {
 	Visible   int    `json:"visible"`
 }
 
-// Courses lists the user's courses via the "all" timeline classification.
+// Courses lists current courses. Historical offerings stay in the local index
+// but must not be paired with or refreshed as the current term.
 func (s *Session) Courses(ctx context.Context, sesskey string) ([]SessionCourse, error) {
 	raw, err := s.AJAX(ctx, sesskey, "core_course_get_enrolled_courses_by_timeline_classification",
-		map[string]any{"classification": "all", "limit": 0, "offset": 0, "sort": "fullname"})
+		map[string]any{"classification": "inprogress", "limit": 0, "offset": 0, "sort": "fullname"})
 	if err != nil {
 		return nil, err
 	}

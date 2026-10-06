@@ -77,8 +77,21 @@ func New(o Options) (*Client, error) {
 		Timeout:   timeout,
 		Transport: o.Transport,
 	}
-	if !o.FollowRedirects {
-		hc.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	hc.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if !o.FollowRedirects {
+			return http.ErrUseLastResponse
+		}
+		if len(via) >= 10 || (len(via) > 0 && via[0].Method != http.MethodGet) {
+			return fmt.Errorf("read-only: redirect refused")
+		}
+		// net/http forwards credentials across ports on the same hostname.
+		// Only an identical origin may receive the original headers.
+		if len(via) > 0 && !SameHost(req.URL, via[0].URL.Scheme, via[0].URL.Host) {
+			req.Header.Del("Authorization")
+			req.Header.Del("Cookie")
+			req.Header.Del("Proxy-Authorization")
+		}
+		return o.Guard.Check(req)
 	}
 	return &Client{
 		hc:        hc,
