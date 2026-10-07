@@ -168,9 +168,15 @@ func lifecycleStoreWithWriter(t *testing.T) (*store.DB, *sql.DB) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	writer, err := sql.Open("sqlite", path)
+	// Match the production writer's lock wait; CI race runs can overlap the
+	// short renewal transaction with the fault-injection trigger's DDL.
+	writer, err := sql.Open("sqlite", path+"?_busy_timeout=5000&_txlock=immediate")
 	if err != nil {
 		t.Fatal(err)
+	}
+	var timeout int
+	if err := writer.QueryRow("PRAGMA busy_timeout").Scan(&timeout); err != nil || timeout != 5000 {
+		t.Fatalf("fixture busy timeout=%d: %v", timeout, err)
 	}
 	t.Cleanup(func() { _ = writer.Close() })
 	return db, writer
