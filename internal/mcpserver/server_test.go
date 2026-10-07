@@ -59,6 +59,9 @@ func TestToolsListReadOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(res.Tools) != 11 {
+		t.Fatalf("registered %d tools, want 11", len(res.Tools))
+	}
 	want := map[string]bool{"list_courses": false, "get_status": false, "sync_start": false, "sync_status": false}
 	for _, tool := range res.Tools {
 		if _, ok := want[tool.Name]; !ok {

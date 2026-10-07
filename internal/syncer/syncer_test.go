@@ -2,11 +2,13 @@ package syncer
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -23,6 +25,21 @@ const whoamiJSON = `{"user":{"id":1,"name":"Me"},"courses":[
  {"course":{"id":12,"code":"SKIP1000","name":"Dropped","year":"2026","session":"Semester 2"},"role":{"role":"student"}}
 ]}`
 
+// Older discovery/lifecycle fixtures have no course content. Explicit empty
+// inventories keep those tests focused while exercising the M2 orchestration.
+func respondEmptyEdInventory(w http.ResponseWriter, r *http.Request) bool {
+	if !strings.HasPrefix(r.URL.Path, "/api/courses/") {
+		return false
+	}
+	for _, kind := range []string{"threads", "lessons", "resources"} {
+		if strings.HasSuffix(r.URL.Path, "/"+kind) {
+			fmt.Fprintf(w, `{"%s":[]}`, kind)
+			return true
+		}
+	}
+	return false
+}
+
 func testProviders(t *testing.T, edURL string) *Providers {
 	t.Helper()
 	u, _ := url.Parse(edURL)
@@ -30,7 +47,7 @@ func testProviders(t *testing.T, edURL string) *Providers {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg := &config.Config{Exclude: []string{"SKIP1000"}, CourseCodePattern: config.CoursePattern}
+	cfg := &config.Config{DataDir: t.TempDir(), Exclude: []string{"SKIP1000"}, CourseCodePattern: config.CoursePattern}
 	// exercise the config helpers used by discovery
 	return &Providers{
 		Cfg: cfg,
@@ -50,7 +67,9 @@ func openStore(t *testing.T) *store.DB {
 
 func TestDiscoverEd(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(whoamiJSON))
+		if !respondEmptyEdInventory(w, r) {
+			w.Write([]byte(whoamiJSON))
+		}
 	}))
 	defer srv.Close()
 
@@ -87,7 +106,9 @@ func TestDiscoverEd(t *testing.T) {
 
 func TestServiceRunAndLease(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(whoamiJSON))
+		if !respondEmptyEdInventory(w, r) {
+			w.Write([]byte(whoamiJSON))
+		}
 	}))
 	defer srv.Close()
 
@@ -132,7 +153,9 @@ func TestServiceRunAndLease(t *testing.T) {
 
 func TestDiscoverMoodlePairs(t *testing.T) {
 	edSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Write([]byte(whoamiJSON))
+		if !respondEmptyEdInventory(w, r) {
+			w.Write([]byte(whoamiJSON))
+		}
 	}))
 	defer edSrv.Close()
 	moodleSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
