@@ -387,6 +387,12 @@ func (b *Batch) Rollback() error {
 			continue
 		}
 		if op.published {
+			// Recheck at each destructive step as well as in the preflight; a
+			// large batch may take time to roll back after losing its lease.
+			if err := matchFile(target, op.publishedHash); err != nil {
+				failures = append(failures, fmt.Errorf("files: refusing rollback of a changed published file"))
+				continue
+			}
 			if err := os.Remove(target); err != nil && !errors.Is(err, os.ErrNotExist) {
 				failures = append(failures, fmt.Errorf("files: cannot remove rolled-back version"))
 				continue
@@ -394,8 +400,16 @@ func (b *Batch) Rollback() error {
 			op.published = false
 		}
 		if op.backed {
+			if err := matchFile(target, ""); err != nil {
+				failures = append(failures, fmt.Errorf("files: refusing to overwrite a newly published target"))
+				continue
+			}
 			if err := safeParents(op.backup, false); err != nil {
 				failures = append(failures, err)
+				continue
+			}
+			if err := matchFile(op.backup, op.expected); err != nil {
+				failures = append(failures, fmt.Errorf("files: refusing rollback of a changed backup"))
 				continue
 			}
 			if err := os.Rename(op.backup, target); err != nil {
