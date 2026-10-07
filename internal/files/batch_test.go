@@ -84,6 +84,29 @@ func TestRollbackRefusesNewerOwner(t *testing.T) {
 	}
 }
 
+func TestRollbackRefusesIdenticalNewerPublication(t *testing.T) {
+	root := t.TempDir()
+	publish(t, root, "original")
+	old, err := NewBatch(root, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.StageBytes("lessons/1/lesson.md", []byte("identical new bytes")); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	publish(t, root, "identical new bytes")
+	if err := old.Rollback(); err == nil {
+		t.Fatal("stale owner rolled back an identical later publication")
+	}
+	data, _ := os.ReadFile(filepath.Join(root, "lessons", "1", "lesson.md"))
+	if string(data) != "identical new bytes" {
+		t.Fatal("new owner's bytes were replaced")
+	}
+}
+
 func TestCommitRefusesChangedManifest(t *testing.T) {
 	root := t.TempDir()
 	publish(t, root, "old")

@@ -21,6 +21,12 @@ import (
 
 const manifestName = ".mirror.json"
 
+type mirrorManifest struct {
+	Version    int               `json:"version"`
+	Generation string            `json:"generation"`
+	Records    map[string]Record `json:"files"`
+}
+
 // Record describes published bytes. A non-ok status represents a policy skip;
 // old local bytes are retained and are never represented as the new download.
 type Record struct {
@@ -69,9 +75,11 @@ func NewBatch(root string, maxFileMB int) (*Batch, error) {
 	if err == nil {
 		hash := sha256.Sum256(data)
 		b.manifestHash = hex.EncodeToString(hash[:])
-		if err := json.Unmarshal(data, &b.previous); err != nil || b.previous == nil {
+		var managed mirrorManifest
+		if err := json.Unmarshal(data, &managed); err != nil || managed.Version != 1 || managed.Generation == "" || managed.Records == nil {
 			return nil, fmt.Errorf("files: invalid managed manifest")
 		}
+		b.previous = managed.Records
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("files: cannot read managed manifest")
 	}
@@ -286,7 +294,9 @@ func (b *Batch) Commit() error {
 			return err
 		}
 	}
-	manifest, err := json.MarshalIndent(b.records, "", "  ")
+	// A fresh generation also distinguishes a later owner that publishes
+	// identical bytes. Hashes alone cannot detect that lost-lease case.
+	manifest, err := json.MarshalIndent(mirrorManifest{Version: 1, Generation: filepath.Base(b.stage), Records: b.records}, "", "  ")
 	if err != nil {
 		return err
 	}
