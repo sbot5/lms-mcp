@@ -4,10 +4,12 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"slices"
+	"strings"
 
 	"github.com/sbot5/lms-mcp/internal/httpx"
 )
@@ -48,7 +50,7 @@ func APIBaseURL(region string) string {
 func (c *Client) Get(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.base+path, nil)
 	if err != nil {
-		return fmt.Errorf("GET %s: bad request", path)
+		return errors.New("ed: invalid API request")
 	}
 	if c.token != "" {
 		req.Header.Set("Authorization", "Bearer "+c.token)
@@ -59,12 +61,58 @@ func (c *Client) Get(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: HTTP %d", path, resp.StatusCode)
+		return responseError(resp)
 	}
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(out); err != nil {
-		return fmt.Errorf("GET %s: decode failed", path)
+	b, err := io.ReadAll(io.LimitReader(resp.Body, (32<<20)+1))
+	if err != nil || len(b) > 32<<20 {
+		return errors.New("ed: could not read API response within 32 MiB")
+	}
+	var failure struct {
+		Code string `json:"code"`
+	}
+	if json.Unmarshal(b, &failure) == nil && (failure.Code == "bad_token" || failure.Code == "unauthorized") {
+		return &APIError{StatusCode: resp.StatusCode, Code: failure.Code}
+	}
+	if err := json.Unmarshal(b, out); err != nil {
+		return errors.New("ed: invalid JSON response")
 	}
 	return nil
+}
+
+// APIError reports an unsuccessful Ed response without retaining its URL,
+// headers or body. Code is populated only for recognized authentication errors.
+type APIError struct {
+	StatusCode int
+	Code       string
+}
+
+func (e *APIError) Error() string {
+	if e.Code == "bad_token" || e.Code == "unauthorized" {
+		return fmt.Sprintf("ed: authentication failed (HTTP %d)", e.StatusCode)
+	}
+	return fmt.Sprintf("ed: HTTP %d", e.StatusCode)
+}
+
+// IsUnavailable distinguishes an absent/forbidden optional feature from a
+// broken credential. Authentication failures must still stop the caller.
+func IsUnavailable(err error) bool {
+	var apiErr *APIError
+	return errors.As(err, &apiErr) && apiErr.Code != "bad_token" && apiErr.Code != "unauthorized" &&
+		(apiErr.StatusCode == http.StatusForbidden || apiErr.StatusCode == http.StatusNotFound)
+}
+
+func responseError(resp *http.Response) error {
+	err := &APIError{StatusCode: resp.StatusCode}
+	var body struct {
+		Code string `json:"code"`
+	}
+	if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&body) == nil {
+		switch strings.ToLower(body.Code) {
+		case "bad_token", "unauthorized":
+			err.Code = strings.ToLower(body.Code)
+		}
+	}
+	return err
 }
 
 type Course struct {

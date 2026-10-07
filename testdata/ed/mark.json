@@ -1,0 +1,1 @@
+{"lesson_mark":{"id":901,"user_id":1,"lesson_id":101,"auto_mark":3,"rubric_mark":2,"mark_override":null,"comment":"Synthetic marking feedback.","is_released":true,"rubric_items":[{"id":902,"name":"Synthetic criterion","mark":2,"max_points":2,"ticket":"must-not-persist"}],"jwt":"must-not-persist","unknown_future_permission":"must-not-persist"}}
