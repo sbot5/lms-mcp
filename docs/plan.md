@@ -9,7 +9,7 @@
 |---|---|---|---|
 | M0 | 计划、协作文件、调研笔记 | 已合并（2026-10-02） | [#2](https://github.com/sbot5/lms-mcp/pull/2) |
 | M1 | 新骨架：配置、凭证、HTTP 守卫、SQLite、认证、doctor、MCP 框架 | 已合并；基础修复于 2026-10-07 合并，CI 全过 | [#3](https://github.com/sbot5/lms-mcp/pull/3)、[#4](https://github.com/sbot5/lms-mcp/pull/4) |
-| M2 | Ed 全量：Lessons、Resources、讨论、作答与截止 | 离线实现与独立审查通过；全量并发检测通过；真实课程验收待云端开发凭证 | |
+| M2 | Ed 全量：Lessons、Resources、讨论、作答与截止 | 离线实现与独立审查通过；全量并发检测通过；真实课程验收待云端开发凭证 | [#5](https://github.com/sbot5/lms-mcp/pull/5) |
 | M3 | Moodle 课件与资源 | 未开始 | |
 | M4 | 文档解析与全文搜索 | 未开始 | |
 | M5 | Moodle 作业、测验、成绩、论坛、日历、站内通知 | 未开始 | |
