@@ -116,12 +116,19 @@ func responseError(resp *http.Response) error {
 }
 
 type Course struct {
-	ID      int    `json:"id"`
-	Code    string `json:"code"`
-	Name    string `json:"name"`
-	Year    string `json:"year"`
-	Session string `json:"session" jsonschema:"e.g. Semester 2"`
-	Role    string `json:"role" jsonschema:"the user's role in this course, e.g. student"`
+	Features *CourseFeatures `json:"features,omitempty"`
+	ID       int             `json:"id"`
+	Code     string          `json:"code"`
+	Name     string          `json:"name"`
+	Year     string          `json:"year"`
+	Session  string          `json:"session" jsonschema:"e.g. Semester 2"`
+	Role     string          `json:"role" jsonschema:"the user's role in this course, e.g. student"`
+}
+
+// Nil flags are unknown; only an explicit false means a tab is disabled.
+type CourseFeatures struct {
+	Lessons   *bool `json:"lessons,omitempty"`
+	Resources *bool `json:"resources,omitempty"`
 }
 
 type WhoamiResult struct {
