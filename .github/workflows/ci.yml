@@ -28,6 +28,9 @@ jobs:
         run: go vet ./...
       - name: test
         run: go test ./...
+      - name: race detector
+        if: runner.os == 'Linux'
+        run: go test -race ./internal/httpx ./internal/syncer
       - name: build
         run: go build -trimpath -o bin/ ./cmd/lms-mcp
   cross-build:

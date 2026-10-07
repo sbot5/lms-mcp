@@ -52,6 +52,11 @@ GET of Ed thread details or Moodle forum posts may still update the platform's
 own read state; this is accepted (plan D7). "New" content is decided by
 lms-mcp's own change detection, not the platform's unread flags.
 
+Ed lesson requests carrying `view` are refused before sending. Remote requests
+require HTTPS, and attachment requests must not carry API credentials. When
+redirect following is explicitly enabled, each destination is checked again;
+credentials are removed on an origin change and POST redirects are refused.
+
 ## Local data
 
 ```text
@@ -83,3 +88,13 @@ The MCP server, a scheduled sync and an interactive command may each run as a
 separate process against the same database. The store opens SQLite in WAL mode
 with a busy timeout; a sync holds a cross-process lease so only one runs at a
 time. Read tools serve the index and never sync implicitly.
+
+A job remains running until its outcome is persisted, renewal stops and its
+lease is released. Loss of the lease cancels the run. Provider errors are
+collected independently so a failing Ed account does not prevent Moodle
+discovery, or vice versa. Paired courses are counted once.
+
+Ed discovery compares known year/semester values, leaving unknown terms
+discoverable without guessing dates. Moodle requests the `inprogress` timeline.
+Stable provider IDs preserve pairings; historical rows remain in the index but
+are not used as candidates for a new current-course pairing.
