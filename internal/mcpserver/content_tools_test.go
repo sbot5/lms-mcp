@@ -19,6 +19,22 @@ import (
 
 const contentCourse = "ABC1234-2026S2"
 
+func TestAssessmentProjectionKeepsOwnSelectionAndReleasedAnswer(t *testing.T) {
+	meta, ok := safeMetadata(`{"responses":[{"question_id":1,"data":{"selection":1,"api_key":"PRIVATE_SENTINEL"}}],"released_answers":[{"question_id":1,"solution":1,"explanation":"Published feedback"}],"responses_availability":"available","marks_availability":"unavailable"}`)
+	if !ok {
+		t.Fatal("metadata rejected")
+	}
+	row := meta["responses"].([]any)[0].(map[string]any)
+	data := row["data"].(map[string]any)
+	if data["selection"] != float64(1) || data["api_key"] != nil {
+		t.Fatal("own selection missing or secret retained", data)
+	}
+	answer := meta["released_answers"].([]any)[0].(map[string]any)
+	if answer["solution"] != float64(1) || answer["explanation"] != "Published feedback" || meta["marks_availability"] != "unavailable" {
+		t.Fatal("released answer or capability status lost", meta)
+	}
+}
+
 func contentCall(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any) map[string]any {
 	t.Helper()
 	r, err := cs.CallTool(context.Background(), &mcp.CallToolParams{Name: name, Arguments: args})
@@ -317,10 +333,13 @@ func TestAssessmentVisibilityRelatedRowsAndSecretWhitelist(t *testing.T) {
 		t.Fatalf("missing related assessment rows: %s", raw)
 	}
 	item := out["item"].(map[string]any)
-	for _, field := range []string{"responses_available", "submissions_available", "released_answers_available", "grades_available", "deadlines_available"} {
+	for _, field := range []string{"responses_available", "submissions_available", "released_answers_available", "deadlines_available", "cached_grades_available"} {
 		if item[field] != true {
 			t.Fatalf("%s missing: %+v", field, item)
 		}
+	}
+	if item["grades_available"] != false || len(item["grades"].([]any)) != 0 {
+		t.Fatal("unavailable parent reported cached grades as current")
 	}
 	if out["availability"] != "content_unavailable" {
 		t.Fatalf("permission state lost: %+v", out)
@@ -341,6 +360,24 @@ func TestAssessmentVisibilityRelatedRowsAndSecretWhitelist(t *testing.T) {
 	}
 	if len(item["grades"].([]any)) != 0 || len(item["deadlines"].([]any)) != 0 || empty["availability"] != "not_synced" {
 		t.Fatalf("invented unavailable data: %+v", empty)
+	}
+}
+
+func TestAssessmentWithdrawnGradeStaysCachedButNotCurrent(t *testing.T) {
+	d := testDeps(t)
+	contentSeed(t, d, store.Item{ID: "ed:lesson:withheld", Kind: "lesson", MetaJSON: `{"marks_availability":"withheld"}`})
+	if _, err := d.DB.UpsertGrade(store.Grade{CourseID: contentCourse, ItemKey: "ed:lesson:withheld", Grade: "8", GradeMax: "10"}); err != nil {
+		t.Fatal(err)
+	}
+	cs := connect(t, d)
+	out := contentCall(t, cs, "get_assessment", map[string]any{"item_id": "ed:lesson:withheld"})
+	item := out["item"].(map[string]any)
+	if item["grades_available"] != false || item["cached_grades_available"] != true || len(item["grades"].([]any)) != 0 {
+		t.Fatal("withdrawn grade presented as current", item)
+	}
+	rows, _ := d.DB.ListGrades(contentCourse)
+	if len(rows) != 1 || rows[0].Grade != "8" {
+		t.Fatal("withdrawn grade cache was deleted")
 	}
 }
 

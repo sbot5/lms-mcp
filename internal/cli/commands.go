@@ -171,8 +171,9 @@ func runMCP(ctx context.Context, args []string, errOut io.Writer) error {
 	}
 	defer db.Close()
 	return mcpserver.Serve(ctx, mcpserver.Deps{
-		DB:     db,
-		Sync:   svc,
-		Status: func() mcpserver.StatusReport { return buildStatus(cfg, sec, db) },
+		DB:       db,
+		Sync:     svc,
+		DataRoot: cfg.DataPath(),
+		Status:   func() mcpserver.StatusReport { return buildStatus(cfg, sec, db) },
 	})
 }

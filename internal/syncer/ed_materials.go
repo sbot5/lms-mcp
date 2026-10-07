@@ -118,6 +118,48 @@ type edMaterialCollector struct {
 	full      bool
 	snapshot  *store.ContentSnapshot
 	downloads map[string]files.Record
+	marks     map[string]edMarkChoice
+}
+
+type edMarkChoice struct {
+	id   int
+	time int64
+}
+
+func edMarkTime(mark, inherited ed.Document) int64 {
+	for _, doc := range []ed.Document{mark, inherited} {
+		for _, key := range []string{"updated_at", "submitted_at", "created_at"} {
+			if stamp := edMaterialTime(doc[key]); stamp != 0 {
+				return stamp
+			}
+		}
+	}
+	return 0
+}
+
+// Availability and score belong to the same selected mark. An older hidden
+// submission must not overwrite the status of the newer published one.
+func (c *edMaterialCollector) selectMark(itemID string, id int, stamp int64, meta map[string]any) bool {
+	if c.marks == nil {
+		c.marks = map[string]edMarkChoice{}
+	}
+	if previous, ok := c.marks[itemID]; ok && previous.id != id {
+		if stamp > 0 && previous.time > 0 {
+			if stamp < previous.time || (stamp == previous.time && id < previous.id) {
+				return false
+			}
+		} else if id < previous.id {
+			return false
+		}
+	}
+	c.marks[itemID] = edMarkChoice{id, stamp}
+	for i := len(c.snapshot.Grades) - 1; i >= 0; i-- {
+		if c.snapshot.Grades[i].ItemKey == itemID {
+			c.snapshot.Grades = append(c.snapshot.Grades[:i], c.snapshot.Grades[i+1:]...)
+		}
+	}
+	delete(meta, "mark")
+	return true
 }
 
 func (c *edMaterialCollector) warning(inventory string) {
@@ -516,7 +558,9 @@ func (c *edMaterialCollector) mark(item store.Item, markID int, inherited ed.Doc
 	mark, err := c.p.Ed.LessonMark(c.ctx, markID)
 	if ed.IsUnavailable(err) {
 		c.warning("lesson marks")
-		meta["marks_availability"] = "unavailable"
+		if c.selectMark(item.ID, markID, edMarkTime(nil, inherited), meta) {
+			meta["marks_availability"] = "unavailable"
+		}
 		return nil
 	}
 	if err != nil {
@@ -525,12 +569,18 @@ func (c *edMaterialCollector) mark(item store.Item, markID int, inherited ed.Doc
 	if !c.owned(mark) {
 		return fmt.Errorf("ed materials: lesson mark belongs to another user")
 	}
+	gradedAt := edMarkTime(mark, inherited)
+	if !c.selectMark(item.ID, markID, gradedAt, meta) {
+		return nil
+	}
 	if !edMaterialReleased(mark) && !edMaterialReleased(inherited) {
+		meta["marks_availability"] = "withheld"
 		return nil
 	}
 	for _, doc := range []ed.Document{mark, inherited} {
 		for _, key := range []string{"released", "published", "is_released"} {
 			if value, ok := doc[key].(bool); ok && !value {
+				meta["marks_availability"] = "withheld"
 				return nil
 			}
 		}
@@ -551,22 +601,11 @@ func (c *edMaterialCollector) mark(item store.Item, markID int, inherited ed.Doc
 		}
 	}
 	if score == "" {
+		meta["marks_availability"] = "unknown"
 		return nil
 	}
+	meta["marks_availability"] = "available"
 	feedback := edMaterialScrubText(edMaterialString(mark, "comment"))
-	gradedAt := edMaterialTime(mark["updated_at"])
-	if gradedAt == 0 {
-		gradedAt = edMaterialTime(mark["created_at"])
-	}
-	if gradedAt == 0 {
-		gradedAt = edMaterialTime(inherited["submitted_at"])
-	}
-	if gradedAt == 0 {
-		gradedAt = edMaterialTime(inherited["updated_at"])
-	}
-	if gradedAt == 0 {
-		gradedAt = edMaterialTime(inherited["created_at"])
-	}
 	grade := store.Grade{CourseID: c.course.ID, ItemKey: item.ID, Name: item.Title, Grade: score, GradeMax: edMaterialNumber(mark["max_points"]), FeedbackMD: feedback, GradedAt: gradedAt}
 	grade.Hash = edMaterialHash(score + "\x00" + grade.GradeMax + "\x00" + feedback)
 	for i := range c.snapshot.Grades {
@@ -652,7 +691,7 @@ func edMaterialWindow(doc ed.Document, effective, regular string) (int64, bool) 
 }
 
 func edMaterialMeta(doc ed.Document) map[string]any {
-	result := map[string]any{}
+	result := map[string]any{"marks_availability": "unknown"}
 	for _, key := range []string{"type", "kind", "state", "status", "openable", "module_id", "module_name", "index", "available_at", "due_at", "locked_at", "solutions_at", "effective_available_at", "effective_due_at", "effective_locked_at", "effective_solutions_at", "category", "challenge_id"} {
 		if raw, exists := doc[key]; exists {
 			if value, ok := edMaterialScalar(raw); ok {
@@ -766,7 +805,7 @@ func edMaterialAssessment(value any, released, response bool, depth int) any {
 				}
 			case "answers", "choices", "options", "value":
 				result[key] = edMaterialAssessment(child, released, response, depth+1)
-			case "answer", "response":
+			case "answer", "response", "selection":
 				if released || response {
 					result[key] = edMaterialAssessment(child, released, response, depth+1)
 				}

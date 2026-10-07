@@ -191,8 +191,8 @@ func (s *Service) renew(ctx context.Context, cancel context.CancelFunc, stop <-c
 	}
 }
 
-// sync is the actual work. M1 discovers and persists courses; provider content
-// sync is added in later milestones. Returns the number of active courses.
+// sync discovers courses and mirrors Ed content. Moodle content is added in
+// later milestones. Returns the number of discovered active courses.
 func (s *Service) sync(ctx context.Context, scope string, full bool) (int, error) {
 	if !validScope(scope) {
 		return 0, errors.New("scope must be all, ed or moodle")
@@ -215,6 +215,11 @@ func (s *Service) sync(ctx context.Context, scope string, full bool) (int, error
 				errs = append(errs, fmt.Errorf("Ed sync failed: %w", err))
 			} else {
 				active = append(active, eds...)
+				for _, course := range eds {
+					if _, err := syncEdCourse(ctx, p, s.db, course, full, s.hold); err != nil {
+						errs = append(errs, fmt.Errorf("Ed course %s: %w", course.ID, err))
+					}
+				}
 			}
 		} else if scope == "ed" || (p.Cfg != nil && p.Cfg.Ed.Enabled) {
 			errs = append(errs, unavailableProvider("Ed", p.EdReason))

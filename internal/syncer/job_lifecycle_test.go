@@ -321,7 +321,9 @@ func TestServiceAllContinuesAfterProviderFailure(t *testing.T) {
 					w.WriteHeader(http.StatusUnauthorized)
 					return
 				}
-				_, _ = w.Write([]byte(whoamiJSON))
+				if !respondEmptyEdInventory(w, r) {
+					_, _ = w.Write([]byte(whoamiJSON))
+				}
 			}))
 			t.Cleanup(edSrv.Close)
 			p := testProviders(t, edSrv.URL)
@@ -384,7 +386,9 @@ func TestServiceAllAggregatesProviderErrors(t *testing.T) {
 
 func TestServiceAllMissingCredentialsDoesNotSkipHealthyProvider(t *testing.T) {
 	edSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(whoamiJSON))
+		if !respondEmptyEdInventory(w, r) {
+			_, _ = w.Write([]byte(whoamiJSON))
+		}
 	}))
 	t.Cleanup(edSrv.Close)
 	p := testProviders(t, edSrv.URL)
@@ -399,7 +403,9 @@ func TestServiceAllMissingCredentialsDoesNotSkipHealthyProvider(t *testing.T) {
 
 func TestServiceAllCountsPairedCourseOnce(t *testing.T) {
 	edSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(whoamiJSON))
+		if !respondEmptyEdInventory(w, r) {
+			_, _ = w.Write([]byte(whoamiJSON))
+		}
 	}))
 	t.Cleanup(edSrv.Close)
 	p := testProviders(t, edSrv.URL)

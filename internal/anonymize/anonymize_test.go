@@ -21,6 +21,18 @@ func decode(t *testing.T, b []byte) map[string]any {
 	return value
 }
 
+func TestUnknownNumericIdentityCannotLeak(t *testing.T) {
+	b, out := sanitize(t, map[string]any{"unrecognized_phone": json.Number("61412345678"), "precise_latitude": json.Number("-33.867850123"), "unknown_reference": json.Number("86420975"), "score": 3.5})
+	for _, sentinel := range []string{"61412345678", "-33.867850123", "86420975"} {
+		if strings.Contains(string(b), sentinel) {
+			t.Fatalf("numeric identity retained: %s", sentinel)
+		}
+	}
+	if out["score"] != 3.5 {
+		t.Fatal("known numeric score changed")
+	}
+}
+
 func sanitize(t *testing.T, value any) ([]byte, map[string]any) {
 	t.Helper()
 	raw, err := json.Marshal(value)

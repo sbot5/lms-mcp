@@ -34,6 +34,62 @@ type materialFixture struct {
 	course                     store.Course
 }
 
+func TestOwnQuizSelectionSurvivesProjection(t *testing.T) {
+	f := newMaterialFixture(t)
+	f.routes["/api/lessons/slides/203/questions/responses"] = map[string]any{"responses": []any{map[string]any{"id": 601, "user_id": 1, "question_id": 501, "data": map[string]any{"selection": 1}}}}
+	snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer batch.Rollback()
+	quiz := materialByID(t, snapshot, "ed:slide:203")
+	if !strings.Contains(quiz.MetaJSON, `"selection":1`) || !strings.Contains(quiz.BodyMD, `"selection": 1`) {
+		t.Fatal("own quiz selection omitted", quiz.MetaJSON, quiz.BodyMD)
+	}
+}
+
+func TestMarkAvailabilityFollowsLatestSelectionInEitherOrder(t *testing.T) {
+	for _, published := range []bool{true, false} {
+		for _, reverse := range []bool{true, false} {
+			t.Run(fmt.Sprintf("published=%v/reverse=%v", published, reverse), func(t *testing.T) {
+				f := newMaterialFixture(t)
+				rows := []any{map[string]any{"id": 702, "user_id": 1, "lesson_mark_id": 903, "is_released": published}, map[string]any{"id": 701, "user_id": 1, "lesson_mark_id": 902, "is_released": !published}}
+				if reverse {
+					rows[0], rows[1] = rows[1], rows[0]
+				}
+				f.routes["/api/users/1/challenges/301/submissions"] = map[string]any{"submissions": rows}
+				f.routes["/api/lesson_marks/903"] = map[string]any{"lesson_mark": map[string]any{"id": 903, "user_id": 1, "score": 8, "is_released": published, "updated_at": "2030-01-03T00:00:00Z"}}
+				f.routes["/api/lesson_marks/902"] = map[string]any{"lesson_mark": map[string]any{"id": 902, "user_id": 1, "score": 2, "is_released": !published, "updated_at": "2030-01-02T00:00:00Z"}}
+				snap, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer batch.Rollback()
+				item := materialByID(t, snap, "ed:slide:204")
+				want := "withheld"
+				if published {
+					want = "available"
+				}
+				if !strings.Contains(item.MetaJSON, `"marks_availability":"`+want+`"`) {
+					t.Fatal("status does not follow selected mark", item.MetaJSON)
+				}
+				found := false
+				for _, g := range snap.Grades {
+					if g.ItemKey == item.ID {
+						found = true
+						if !published || g.Grade != "8" {
+							t.Fatal("incorrect current score", g)
+						}
+					}
+				}
+				if found != published {
+					t.Fatal("current grade availability mismatch")
+				}
+			})
+		}
+	}
+}
+
 func newMaterialFixture(t *testing.T) *materialFixture {
 	t.Helper()
 	f := &materialFixture{routes: map[string]any{}, statuses: map[string]int{}, requests: map[string]int{}, fileBytes: "%PDF synthetic"}

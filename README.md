@@ -82,7 +82,19 @@ MCP 走 stdio，stdout 只承载协议，日志走 stderr。工具（均为只�
 
 更多查询工具（帖子、课件、成绩、截止、全文搜索）在后续里程碑加入，见 [plan.md](docs/plan.md)。
 
-当前 M1 的同步只发现并配对课程。Ed 选择最新可识别学期，Moodle 读取站点标记为当前的课程；历史课程保留在索引中。某个平台失败时，另一个平台仍继续发现课程，并在同步结果中报告失败。任务完成状态会等结果保存和同步租约释放后才返回。
+当前 M2 开发版同步 Ed 课时、PDF 和附件、Resources、讨论与递归回复，以及可读取的自身作答、已公布解答、成绩和截止信息。Ed 选择最新可识别学期；历史课程保留在索引中。Moodle 当前支持课程发现，内容同步在后续里程碑接入。一个课程或平台失败时，其他课程与平台继续，并在同步结果中报告失败。
+
+| Ed 查询工具 | 用途 |
+| --- | --- |
+| `list_posts` / `get_post` | 按课程、分类、教师或本人筛选帖子，读取嵌套回复。 |
+| `list_materials` / `read_material` | 查课时、幻灯片和资源，读取 Markdown 或已验证的文本附件。 |
+| `whats_new` | 查询内容变化；首次导入作为基线，不视为新通知。 |
+| `upcoming_deadlines` | 查询未来截止时间和实际读到的完成状态。 |
+| `get_assessment` | 读取要求、自身作答、已公布答案、当前可用成绩及反馈。 |
+
+列表均支持 `limit` / `cursor`，结果包含缓存时间和显式截断标记。PDF/PPTX/DOCX 的文本提取见 M4；当前下载原件并保留链接。未开放内容或无权读取的成绩会明确标记，旧分数缓存不会被描述成当前已公布成绩。
+
+同步先暂存文件，再提交整课数据库与事件。下载失败或租约丢失会保留旧检查点并回滚文件；本地修改冲突会停止该课。远端删除保留原件和索引归档，同时移出当前清单及截止查询。讨论元数据增量检查，每 24 小时复查详情；`-full` 立即完整复查详情和附件。
 
 ## 云端开发
 
@@ -95,7 +107,9 @@ MCP 走 stdio，stdout 只承载协议，日志走 stderr。工具（均为只�
 
 ## 命令
 
-`setup`、`auth ed|moodle|status`、`doctor`、`sync`、`status`、`list`、`search <query>`、`mcp`、`version`。全局参数 `-config <文件>`（默认是系统配置目录下的 `lms-mcp/config.json`）。
+`setup`、`auth ed|moodle|status`、`doctor`、`sync`、`status`、`list`、`search <query>`、`capture ed`、`mcp`、`version`。全局参数 `-config <文件>`（默认是系统配置目录下的 `lms-mcp/config.json`）。
+
+`capture ed -kind lesson -id 123 -out synthetic-lesson.json` 生成合成测试样本：ID 重映射、自由文本和未知名称合成化、URL 主机替换、时间统一平移，原始响应只在内存中。每次 CLI 采集一项；跨文件关联需要使用同一个匿名化实例并校对引用。不要把真实课程文件当成可公开的样本。当前 M2 已做离线合成验证，真实课程验收仍待提供开发凭证的云端会话。
 
 ## 开发
 

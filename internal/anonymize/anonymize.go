@@ -237,6 +237,11 @@ func (s *Sanitizer) walk(value any, key string) any {
 			}
 			return t.Add(s.shift).Unix()
 		}
+		if !schemaFields[key] {
+			// Unknown numeric fields can be phone numbers or coordinates. Their
+			// renamed key alone does not make the original value anonymous.
+			return s.label("numeric:" + string(v))
+		}
 		return v
 	case string:
 		if idField(key) {

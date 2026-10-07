@@ -34,7 +34,7 @@ never import `cli`, the orchestration layer, or each other.
 | `internal/moodle` | Moodle browser-session client over `httpx`: the unauthenticated public-config probe, sesskey retrieval, allowlisted AJAX calls, page and file reads, and iCalendar parsing. Also retains the earlier HTML discovery helpers. |
 | `internal/render` | Convert Ed XML and Moodle HTML to Markdown; collect asset URLs; escape and redact. No network. |
 | `internal/store` | SQLite (WAL) index: schema and migrations, items/files/grades/deadlines/events, FTS5 search, sync runs and cross-process leases. No knowledge of provider HTTP. |
-| `internal/files` | Mirror materials to disk: streaming downloads, atomic replace, the per-file size cap, and video-as-link. (M3) |
+| `internal/files` | Stage streaming material downloads with a per-file cap, managed hashes and conditional requests; publish atomically per file with retained backups and generation-aware rollback. Video is a link. (M2) |
 | `internal/extract` | Per-page text extraction from PDF, PPTX, DOCX, ipynb and HTML, cached by content hash. (M4) |
 | `internal/syncer` | Orchestrate a sync: discover and pair courses, run each provider incrementally, detect changes and emit events. Owns the async job (lease, goroutine, progress). |
 | `internal/notify` | Notification rules, aggregation and Windows toasts. (M6) |

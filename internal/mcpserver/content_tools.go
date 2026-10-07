@@ -224,7 +224,7 @@ func safeMetadata(raw string) (map[string]any, bool) {
 		return map[string]any{}, false
 	}
 	out := map[string]any{}
-	for _, key := range []string{"category", "subcategory", "type", "is_own", "is_answered", "is_private", "number", "responses", "submissions", "released_answers", "availability", "content_unavailable"} {
+	for _, key := range []string{"category", "subcategory", "type", "is_own", "is_answered", "is_private", "number", "responses", "submissions", "released_answers", "availability", "content_unavailable", "questions_availability", "responses_availability", "submissions_availability", "marks_availability", "attempt_availability"} {
 		if value, ok := input[key]; ok {
 			out[key] = safeMetaValue(value, 0)
 		}
@@ -239,7 +239,7 @@ func safeMetaValue(value any, depth int) any {
 	switch v := value.(type) {
 	case map[string]any:
 		out := map[string]any{}
-		for _, key := range []string{"id", "slide_id", "question_id", "type", "response", "answer", "value", "content", "text", "code", "language", "status", "grade", "score", "feedback", "created_at", "updated_at", "choices", "correct", "result", "submitted_at", "state", "openable", "content_unavailable", "opens_at", "due_at", "cutoff_at", "closed_at", "released_at", "available_at", "started_at", "finished_at", "schedule", "enabled", "title", "body_md", "question", "options", "is_correct", "max_score", "mark", "marks", "grade_max"} {
+		for _, key := range []string{"id", "slide_id", "question_id", "type", "response", "answer", "selection", "data", "solution", "explanation", "correct_answer", "value", "content", "text", "code", "language", "status", "grade", "score", "feedback", "created_at", "updated_at", "choices", "correct", "result", "submitted_at", "state", "openable", "content_unavailable", "opens_at", "due_at", "cutoff_at", "closed_at", "released_at", "available_at", "started_at", "finished_at", "schedule", "enabled", "title", "body_md", "question", "options", "is_correct", "max_score", "mark", "marks", "grade_max"} {
 			if child, ok := v[key]; ok {
 				out[key] = safeMetaValue(child, depth+1)
 			}
@@ -710,8 +710,17 @@ func (d Deps) getAssessment(_ context.Context, _ *mcp.CallToolRequest, in conten
 		return nil, out, fmt.Errorf("assessment grades unavailable")
 	}
 	gradeRows := make([]any, 0)
+	cachedGrades := 0
 	for _, g := range grades {
 		if ids[g.ItemKey] {
+			cachedGrades++
+			current, err := d.currentGradeItem(g.ItemKey)
+			if err != nil {
+				return nil, out, err
+			}
+			if !current {
+				continue
+			}
 			gradeRows = append(gradeRows, map[string]any{"item_id": g.ItemKey, "name": g.Name, "grade": g.Grade, "grade_max": g.GradeMax, "percentage": g.Percentage, "feedback_md": g.FeedbackMD, "graded_at": g.GradedAt})
 		}
 	}
@@ -728,9 +737,41 @@ func (d Deps) getAssessment(_ context.Context, _ *mcp.CallToolRequest, in conten
 	out.Item["slides"], out.Item["files"] = slides, files
 	out.Item["grades"], out.Item["deadlines"] = gradeRows, deadlineRows
 	out.Item["grades_available"], out.Item["deadlines_available"] = len(gradeRows) > 0, len(deadlineRows) > 0
+	out.Item["cached_grades_available"] = cachedGrades > 0
 	out.Item["responses_available"], out.Item["submissions_available"], out.Item["released_answers_available"] = responsesAvailable, submissionsAvailable, answersAvailable
 	err = boundContent(&out)
 	return nil, out, err
+}
+
+// Keep withdrawn/unavailable grades in the archive, but do not describe them
+// as currently published. Unavailable ancestors also make a cached child stale.
+func (d Deps) currentGradeItem(id string) (bool, error) {
+	seen := map[string]bool{}
+	first := true
+	for id != "" {
+		if seen[id] || len(seen) >= 64 {
+			return false, nil
+		}
+		seen[id] = true
+		it, ok, err := d.DB.GetItem(id)
+		if err != nil {
+			return false, fmt.Errorf("assessment availability could not be read")
+		}
+		if !ok || it.RemovedAt != 0 {
+			return false, nil
+		}
+		meta, _ := safeMetadata(it.MetaJSON)
+		if unavailable, _ := meta["content_unavailable"].(bool); unavailable {
+			return false, nil
+		}
+		if first {
+			if state, ok := meta["marks_availability"].(string); ok && state != "" && state != "available" {
+				return false, nil
+			}
+		}
+		id, first = it.ParentID, false
+	}
+	return true, nil
 }
 
 // Budget the encoded object, including escaped text, metadata and reply trees.
