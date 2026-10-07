@@ -312,7 +312,11 @@ func (c *edMaterialCollector) slide(doc ed.Document, lessonID, assetDir string, 
 				if !c.owned(response) {
 					return item, meta, false, fmt.Errorf("ed materials: quiz response belongs to another user")
 				}
-				own = append(own, edMaterialAssessment(response, true, true, 0))
+				available := edMaterialReleased(response) || edMaterialSolutionsReleased(lesson) || edMaterialSolutionsReleased(doc)
+				if edMaterialExplicitlyHidden(response) {
+					available = false
+				}
+				own = append(own, edMaterialAssessment(response, available, true, 0))
 			}
 			meta["responses"] = own
 			body += edMaterialJSONBlock("Your responses", own)
@@ -762,8 +766,12 @@ func edMaterialAssessment(value any, released, response bool, depth int) any {
 				}
 			case "answers", "choices", "options", "value":
 				result[key] = edMaterialAssessment(child, released, response, depth+1)
-			case "answer", "response", "solution", "explanation", "correct_answer":
+			case "answer", "response":
 				if released || response {
+					result[key] = edMaterialAssessment(child, released, response, depth+1)
+				}
+			case "solution", "explanation", "correct_answer":
+				if released {
 					result[key] = edMaterialAssessment(child, released, response, depth+1)
 				}
 			}

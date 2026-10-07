@@ -494,6 +494,27 @@ func TestEdMaterialsAssessmentProjectionProtectsEveryExport(t *testing.T) {
 	}
 }
 
+func TestEdMaterialsOwnResponseDoesNotReleaseSolutions(t *testing.T) {
+	f := newMaterialFixture(t)
+	f.routes["/api/lessons/slides/203/questions/responses"] = map[string]any{"responses": []any{map[string]any{
+		"id": 601, "question_id": 501, "user_id": 1, "is_released": false,
+		"data": map[string]any{"answer": 1, "code": "print('own code')", "solution": "UNRELEASED_SENTINEL", "explanation": "UNRELEASED_SENTINEL", "correct_answer": "UNRELEASED_SENTINEL"},
+	}}}
+	snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer batch.Rollback()
+	all, _ := json.Marshal(snapshot)
+	if strings.Contains(string(all), "UNRELEASED_SENTINEL") {
+		t.Fatal("reading an own response released hidden solutions")
+	}
+	quiz := materialByID(t, snapshot, "ed:slide:203")
+	if !strings.Contains(quiz.BodyMD, "own code") {
+		t.Fatal("own code was dropped with unpublished solutions")
+	}
+}
+
 func TestEdMaterialsExportURLsUseSafeQueryWhitelist(t *testing.T) {
 	f := newMaterialFixture(t)
 	raw := f.srv.URL + "/api/files/signed.pdf?SessKey=PRIVATE_SENTINEL&API_KEY=PRIVATE_SENTINEL&Password=PRIVATE_SENTINEL&SESSION_COOKIE=PRIVATE_SENTINEL&credential=PRIVATE_SENTINEL&privateStudent=PRIVATE_SENTINEL&Part=2&id=10&dl=1"
