@@ -38,6 +38,14 @@ func collectEdMaterials(ctx context.Context, p *Providers, course store.Course, 
 	if me.UserID <= 0 {
 		return snapshot, nil, fmt.Errorf("ed materials: missing own user ID")
 	}
+	lessonsEnabled, resourcesEnabled := true, true
+	for _, enrolled := range me.Courses {
+		if enrolled.ID == course.EdCourseID && enrolled.Features != nil {
+			lessonsEnabled = enrolled.Features.Lessons == nil || *enrolled.Features.Lessons
+			resourcesEnabled = enrolled.Features.Resources == nil || *enrolled.Features.Resources
+			break
+		}
+	}
 	root := p.Cfg.DataPath(files.SafeName(course.Code+"-"+course.Term)+"-ed-"+strconv.Itoa(course.EdCourseID), "ed")
 	batch, err = files.NewBatch(root, p.Cfg.MaxFileMB)
 	if err != nil {
@@ -50,47 +58,51 @@ func collectEdMaterials(ctx context.Context, p *Providers, course store.Course, 
 		}
 	}()
 	c := edMaterialCollector{ctx: ctx, p: p, course: course, ownID: me.UserID, batch: batch, full: full, snapshot: &snapshot}
-	lessons, err := p.Ed.Lessons(ctx, course.EdCourseID)
-	if ed.IsUnavailable(err) {
-		c.warning("lessons")
-	} else if err != nil {
-		return snapshot, batch, err
-	} else {
-		snapshot.Kinds = append(snapshot.Kinds, "lesson")
-		slidesComplete := true
-		seen := map[int]bool{}
-		for _, lesson := range lessons {
-			id := edMaterialID(lesson["id"])
-			if id == 0 || seen[id] {
-				return snapshot, batch, fmt.Errorf("ed materials: invalid or duplicate lesson ID")
+	if lessonsEnabled {
+		lessons, err := p.Ed.Lessons(ctx, course.EdCourseID)
+		if ed.IsUnavailable(err) {
+			c.warning("lessons")
+		} else if err != nil {
+			return snapshot, batch, err
+		} else {
+			snapshot.Kinds = append(snapshot.Kinds, "lesson")
+			slidesComplete := true
+			seen := map[int]bool{}
+			for _, lesson := range lessons {
+				id := edMaterialID(lesson["id"])
+				if id == 0 || seen[id] {
+					return snapshot, batch, fmt.Errorf("ed materials: invalid or duplicate lesson ID")
+				}
+				seen[id] = true
+				complete, collectErr := c.lesson(lesson)
+				if collectErr != nil {
+					return snapshot, batch, collectErr
+				}
+				slidesComplete = slidesComplete && complete
 			}
-			seen[id] = true
-			complete, collectErr := c.lesson(lesson)
-			if collectErr != nil {
-				return snapshot, batch, collectErr
+			if slidesComplete {
+				snapshot.Kinds = append(snapshot.Kinds, "slide")
 			}
-			slidesComplete = slidesComplete && complete
-		}
-		if slidesComplete {
-			snapshot.Kinds = append(snapshot.Kinds, "slide")
 		}
 	}
-	resources, err := p.Ed.Resources(ctx, course.EdCourseID)
-	if ed.IsUnavailable(err) {
-		c.warning("resources")
-	} else if err != nil {
-		return snapshot, batch, err
-	} else {
-		snapshot.Kinds = append(snapshot.Kinds, "resource")
-		seen := map[int]bool{}
-		for _, resource := range resources {
-			id := edMaterialID(resource["id"])
-			if id == 0 || seen[id] {
-				return snapshot, batch, fmt.Errorf("ed materials: invalid or duplicate resource ID")
-			}
-			seen[id] = true
-			if err := c.resource(resource); err != nil {
-				return snapshot, batch, err
+	if resourcesEnabled {
+		resources, err := p.Ed.Resources(ctx, course.EdCourseID)
+		if ed.IsUnavailable(err) {
+			c.warning("resources")
+		} else if err != nil {
+			return snapshot, batch, err
+		} else {
+			snapshot.Kinds = append(snapshot.Kinds, "resource")
+			seen := map[int]bool{}
+			for _, resource := range resources {
+				id := edMaterialID(resource["id"])
+				if id == 0 || seen[id] {
+					return snapshot, batch, fmt.Errorf("ed materials: invalid or duplicate resource ID")
+				}
+				seen[id] = true
+				if err := c.resource(resource); err != nil {
+					return snapshot, batch, err
+				}
 			}
 		}
 	}
@@ -300,7 +312,7 @@ func (c *edMaterialCollector) slide(doc ed.Document, lessonID, assetDir string, 
 				if !c.owned(response) {
 					return item, meta, false, fmt.Errorf("ed materials: quiz response belongs to another user")
 				}
-				own = append(own, edMaterialScrub(response))
+				own = append(own, edMaterialAssessment(response, true, true, 0))
 			}
 			meta["responses"] = own
 			body += edMaterialJSONBlock("Your responses", own)
@@ -570,27 +582,78 @@ func (c *edMaterialCollector) mark(item store.Item, markID int, inherited ed.Doc
 }
 
 func (c *edMaterialCollector) deadline(item store.Item, doc, attempt ed.Document) {
-	window := func(effective, regular string) int64 {
-		if value, exists := doc[effective]; exists {
-			return edMaterialTime(value)
+	if item.Kind == "slide" {
+		present := false
+		for _, key := range []string{"available_at", "effective_available_at", "due_at", "effective_due_at", "locked_at", "effective_locked_at"} {
+			if _, ok := doc[key]; ok {
+				present = true
+				break
+			}
 		}
-		return edMaterialTime(doc[regular])
+		if !present {
+			return
+		}
 	}
-	d := store.Deadline{CourseID: c.course.ID, ItemID: item.ID, Kind: item.Kind, OpensAt: window("effective_available_at", "available_at"), DueAt: window("effective_due_at", "due_at"), CutoffAt: window("effective_locked_at", "locked_at"), SubmissionStatus: edMaterialString(doc, "status")}
-	if status := edMaterialString(attempt, "status"); status != "" {
-		d.SubmissionStatus = status
+	d := store.Deadline{CourseID: c.course.ID, ItemID: item.ID, Kind: item.Kind}
+	var known store.DeadlinePresence
+	d.OpensAt, known.Opens = edMaterialWindow(doc, "effective_available_at", "available_at")
+	d.DueAt, known.Due = edMaterialWindow(doc, "effective_due_at", "due_at")
+	d.CutoffAt, known.Cutoff = edMaterialWindow(doc, "effective_locked_at", "locked_at")
+	statusDoc := doc
+	if _, exists := attempt["status"]; exists {
+		statusDoc = attempt
+	}
+	if status, ok := statusDoc["status"].(string); ok {
+		switch status {
+		case "unattempted", "attempted", "in_progress", "submitted", "completed", "draft", "unsubmitted":
+			d.SubmissionStatus, known.Status = status, true
+		}
 	}
 	d.Completed = d.SubmissionStatus == "completed" || d.SubmissionStatus == "submitted"
-	if d.OpensAt > 0 || d.DueAt > 0 || d.CutoffAt > 0 {
-		c.snapshot.Deadlines = append(c.snapshot.Deadlines, d)
+	if !known.Opens || !known.Due || !known.Cutoff || !known.Status {
+		c.snapshot.Warnings = append(c.snapshot.Warnings, "Ed "+item.Kind+" deadline has missing or invalid fields; previous unknown fields retained")
 	}
+	if known.Opens || known.Due || known.Cutoff || known.Status {
+		c.snapshot.Deadlines = append(c.snapshot.Deadlines, d)
+		if c.snapshot.DeadlineFields == nil {
+			c.snapshot.DeadlineFields = map[string]store.DeadlinePresence{}
+		}
+		c.snapshot.DeadlineFields[item.ID] = known
+	}
+}
+
+// Missing or malformed timestamps are unknown. Explicit null, empty and zero
+// values are known removals, including effective overrides of regular values.
+func edMaterialWindow(doc ed.Document, effective, regular string) (int64, bool) {
+	value, exists := doc[effective]
+	if !exists {
+		value, exists = doc[regular]
+	}
+	if !exists {
+		return 0, false
+	}
+	if value == nil {
+		return 0, true
+	}
+	if text, ok := value.(string); ok && strings.TrimSpace(text) == "" {
+		return 0, true
+	}
+	if number := edMaterialNumber(value); number == "0" {
+		return 0, true
+	}
+	if parsed := edMaterialTime(value); parsed > 0 {
+		return parsed, true
+	}
+	return 0, false
 }
 
 func edMaterialMeta(doc ed.Document) map[string]any {
 	result := map[string]any{}
 	for _, key := range []string{"type", "kind", "state", "status", "openable", "module_id", "module_name", "index", "available_at", "due_at", "locked_at", "solutions_at", "effective_available_at", "effective_due_at", "effective_locked_at", "effective_solutions_at", "category", "challenge_id"} {
-		if value, exists := doc[key]; exists {
-			result[key] = edMaterialScrub(value)
+		if raw, exists := doc[key]; exists {
+			if value, ok := edMaterialScalar(raw); ok {
+				result[key] = value
+			}
 		}
 	}
 	return result
@@ -599,8 +662,10 @@ func edMaterialMeta(doc ed.Document) map[string]any {
 func edMaterialAvailability(doc ed.Document) map[string]any {
 	result := map[string]any{"content_unavailable": edMaterialUnavailable(doc)}
 	for _, key := range []string{"state", "openable", "available_at", "effective_available_at", "solutions_at", "effective_solutions_at"} {
-		if value, ok := doc[key]; ok {
-			result[key] = edMaterialScrub(value)
+		if raw, exists := doc[key]; exists {
+			if value, ok := edMaterialScalar(raw); ok {
+				result[key] = value
+			}
 		}
 	}
 	return result
@@ -649,31 +714,93 @@ func edMaterialSolutionsReleased(doc ed.Document) bool {
 }
 
 func edMaterialQuestion(doc ed.Document, released bool) any {
-	var strip func(any) any
-	strip = func(value any) any {
-		switch value := value.(type) {
-		case ed.Document:
-			return strip(map[string]any(value))
-		case map[string]any:
-			result := map[string]any{}
-			for key, child := range value {
-				if !released && (key == "solution" || key == "explanation" || key == "correct" || key == "is_correct" || key == "correct_answer") {
-					continue
+	return edMaterialAssessment(doc, released, false, 0)
+}
+
+// Assessment documents are an export boundary: unknown fields and arbitrary
+// nested objects never enter the database or the generated lesson Markdown.
+// The same projection applies to question data, choices and the user's answer
+// values, including shapes whose future fields have innocuous names.
+func edMaterialAssessment(value any, released, response bool, depth int) any {
+	if depth > 16 {
+		return nil
+	}
+	if doc, ok := value.(ed.Document); ok {
+		value = map[string]any(doc)
+	}
+	switch value := value.(type) {
+	case map[string]any:
+		result := map[string]any{}
+		for key, child := range value {
+			switch key {
+			case "id", "question_id", "slide_id", "user_id", "index", "option_id", "choice_id":
+				if number := edMaterialNumber(child); number != "" {
+					parsed, _ := strconv.ParseFloat(number, 64)
+					if parsed >= 0 && math.Trunc(parsed) == parsed {
+						result[key] = parsed
+					}
 				}
-				result[key] = strip(child)
+			case "title", "type", "content", "document", "text", "label", "language", "status", "created_at", "updated_at", "submitted_at":
+				if text, ok := child.(string); ok {
+					result[key] = edMaterialScrubText(text)
+				}
+			case "code", "source":
+				if text, ok := child.(string); ok && (released || response) {
+					result[key] = edMaterialScrubText(text)
+				}
+			case "released", "published", "is_released", "selected", "is_selected", "is_completed":
+				if flag, ok := child.(bool); ok {
+					result[key] = flag
+				}
+			case "correct", "is_correct":
+				if flag, ok := child.(bool); ok && (released || response) {
+					result[key] = flag
+				}
+			case "data":
+				if _, ok := child.(map[string]any); ok {
+					result[key] = edMaterialAssessment(child, released, response, depth+1)
+				}
+			case "answers", "choices", "options", "value":
+				result[key] = edMaterialAssessment(child, released, response, depth+1)
+			case "answer", "response", "solution", "explanation", "correct_answer":
+				if released || response {
+					result[key] = edMaterialAssessment(child, released, response, depth+1)
+				}
 			}
-			return result
-		case []any:
-			result := make([]any, len(value))
-			for i, child := range value {
-				result[i] = strip(child)
+		}
+		return result
+	case []any:
+		result := make([]any, 0, len(value))
+		for _, child := range value {
+			if projected := edMaterialAssessment(child, released, response, depth+1); projected != nil {
+				result = append(result, projected)
 			}
-			return result
-		default:
-			return edMaterialScrub(value)
+		}
+		return result
+	default:
+		projected, _ := edMaterialScalar(value)
+		return projected
+	}
+}
+
+func edMaterialScalar(value any) (any, bool) {
+	switch value := value.(type) {
+	case nil:
+		return nil, true
+	case string:
+		return edMaterialScrubText(value), true
+	case bool:
+		return value, true
+	case float64:
+		return value, !math.IsNaN(value) && !math.IsInf(value, 0)
+	case int:
+		return value, true
+	case json.Number:
+		if number := edMaterialNumber(value); number != "" {
+			return value, true
 		}
 	}
-	return edMaterialScrub(strip(doc))
+	return nil, false
 }
 
 func edMaterialFinalize(item *store.Item, meta map[string]any) {
@@ -752,7 +879,8 @@ func edMaterialJSONBlock(title string, value []any) string {
 	return "\n\n### " + title + "\n\n" + fence + "json\n" + string(data) + "\n" + fence
 }
 
-var edMaterialURLPattern = regexp.MustCompile(`https?://[^\s<>"')]+`)
+var edMaterialURLPattern = regexp.MustCompile(`(?i)https?://[^\s<>"')]+`)
+var edMaterialURLInteger = regexp.MustCompile(`^[0-9]{1,20}$`)
 
 func edMaterialScrubText(value string) string {
 	return edMaterialURLPattern.ReplaceAllStringFunc(value, func(raw string) string { return edMaterialCleanURL(html.UnescapeString(raw)) })
@@ -761,18 +889,33 @@ func edMaterialCleanURL(value string) string {
 	if value == "" {
 		return ""
 	}
-	u, err := url.Parse(value)
-	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+	u, err := url.Parse(html.UnescapeString(value))
+	if err != nil || (strings.ToLower(u.Scheme) != "http" && strings.ToLower(u.Scheme) != "https") || u.Host == "" {
 		return ""
 	}
 	u.User = nil
 	u.Fragment = ""
-	query := u.Query()
-	for key := range query {
+	u.Scheme = strings.ToLower(u.Scheme)
+	// Retain only numeric identifiers, a numeric page/part and the download
+	// flag. The original signed URL remains confined to OpenFile's request.
+	query := url.Values{}
+	for key, values := range u.Query() {
 		lower := strings.ToLower(key)
-		if strings.Contains(lower, "token") || strings.Contains(lower, "ticket") || strings.Contains(lower, "jwt") || strings.Contains(lower, "secret") || strings.Contains(lower, "signature") || strings.HasPrefix(lower, "x-amz-") || lower == "key" || lower == "auth" || lower == "authorization" || lower == "expires" || lower == "expiry" || lower == "policy" || lower == "key-pair-id" {
-			query.Del(key)
+		for _, parameter := range values {
+			switch lower {
+			case "id", "part":
+				if edMaterialURLInteger.MatchString(parameter) {
+					query.Add(lower, parameter)
+				}
+			case "dl":
+				if parameter == "0" || parameter == "1" || strings.EqualFold(parameter, "true") || strings.EqualFold(parameter, "false") {
+					query.Add(lower, strings.ToLower(parameter))
+				}
+			}
 		}
+	}
+	for key := range query {
+		sort.Strings(query[key])
 	}
 	u.RawQuery = query.Encode()
 	return u.String()

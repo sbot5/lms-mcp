@@ -28,6 +28,7 @@ type materialFixture struct {
 	requests                   map[string]int
 	conditional, unconditional int
 	fileBytes                  string
+	fileQueries                []string
 	srv                        *httptest.Server
 	p                          *Providers
 	course                     store.Course
@@ -49,6 +50,7 @@ func newMaterialFixture(t *testing.T) *materialFixture {
 			return
 		}
 		if strings.HasPrefix(r.URL.Path, "/api/files/") || strings.HasSuffix(r.URL.Path, "/download") {
+			f.fileQueries = append(f.fileQueries, r.URL.RawQuery)
 			if r.Header.Get("If-None-Match") == `"synthetic-tag"` && r.Header.Get("If-Modified-Since") == "Tue, 01 Jan 2030 00:00:00 GMT" {
 				f.conditional++
 				w.WriteHeader(http.StatusNotModified)
@@ -79,7 +81,7 @@ func newMaterialFixture(t *testing.T) *materialFixture {
 	asset := f.srv.URL + "/api/files/slides.pdf?token=must-not-persist&ticket=must-not-persist&part=1"
 	assetXML := strings.ReplaceAll(asset, "&", "&amp;")
 	f.routes["/api/user"] = map[string]any{"user": map[string]any{"id": 1}, "courses": []any{}}
-	f.routes["/api/courses/10/lessons"] = map[string]any{"lessons": []any{map[string]any{"id": 101, "module_id": 11, "title": "Synthetic lesson", "state": "active", "openable": true, "status": "unattempted", "available_at": "2030-01-01T10:00:00+10:00", "due_at": "2030-01-08T10:00:00+10:00", "solutions_at": "2000-01-01T00:00:00Z"}}, "modules": []any{map[string]any{"id": 11, "name": "Synthetic module"}}}
+	f.routes["/api/courses/10/lessons"] = map[string]any{"lessons": []any{map[string]any{"id": 101, "module_id": 11, "title": "Synthetic lesson", "state": "active", "openable": true, "status": "unattempted", "available_at": "2030-01-01T10:00:00+10:00", "due_at": "2030-01-08T10:00:00+10:00", "locked_at": nil, "solutions_at": "2000-01-01T00:00:00Z"}}, "modules": []any{map[string]any{"id": 11, "name": "Synthetic module"}}}
 	f.routes["/api/lessons/101"] = map[string]any{"lesson": map[string]any{"id": 101, "title": "Synthetic lesson", "slides": []any{
 		map[string]any{"id": 201, "title": "Reading", "type": "document", "content": `<paragraph>Synthetic reading <file url="` + assetXML + `" filename="slides.pdf"/></paragraph>`},
 		map[string]any{"id": 202, "title": "Slides", "filename": "slides.pdf", "type": "pdf", "file_url": asset},
@@ -205,7 +207,7 @@ func TestEdMaterialsStagedCompleteAndRepeatable(t *testing.T) {
 func TestEdMaterialsUnavailableInventoriesAndScheduledLesson(t *testing.T) {
 	f := newMaterialFixture(t)
 	f.statuses["/api/courses/10/resources"] = 403
-	f.routes["/api/courses/10/lessons"] = map[string]any{"lessons": []any{map[string]any{"id": 101, "title": "Scheduled lesson", "state": "scheduled", "openable": false, "due_at": "2030-01-08T00:00:00Z"}}}
+	f.routes["/api/courses/10/lessons"] = map[string]any{"lessons": []any{map[string]any{"id": 101, "title": "Scheduled lesson", "state": "scheduled", "openable": false, "status": "unattempted", "available_at": nil, "locked_at": nil, "due_at": "2030-01-08T00:00:00Z"}}}
 	snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
 	if err != nil {
 		t.Fatal(err)
@@ -412,5 +414,259 @@ func TestEdMaterialsLatestGradeIgnoresSubmissionOrder(t *testing.T) {
 		if grade.ItemKey == "ed:slide:204" && grade.Grade != "8" {
 			t.Fatal(grade)
 		}
+	}
+}
+
+func TestEdMaterialsAssessmentProjectionProtectsEveryExport(t *testing.T) {
+	f := newMaterialFixture(t)
+	privateFields := func() map[string]any {
+		return map[string]any{
+			"api_key": "PRIVATE_SENTINEL", "private_key": "PRIVATE_SENTINEL", "session_cookie": "PRIVATE_SENTINEL",
+			"credential":        map[string]any{"value": "PRIVATE_SENTINEL"},
+			"user":              map[string]any{"name": "privateStudent", "email": "privateStudent@example.invalid"},
+			"future_permission": map[string]any{"data": map[string]any{"password": "PRIVATE_SENTINEL"}},
+		}
+	}
+	question := privateFields()
+	question["id"] = 501
+	question["is_released"] = true
+	data := privateFields()
+	data["type"] = "multiple-choice"
+	data["content"] = "<paragraph>Visible question.</paragraph>"
+	choice := privateFields()
+	choice["index"] = 0
+	choice["text"] = "Visible choice"
+	choice["value"] = privateFields()
+	choice["value"].(map[string]any)["choice_id"] = 1
+	data["answers"] = []any{choice}
+	data["solution"] = privateFields()
+	data["solution"].(map[string]any)["value"] = 1
+	data["explanation"] = "Visible published explanation"
+	question["data"] = data
+	response := privateFields()
+	response["id"] = 601
+	response["user_id"] = 1
+	response["question_id"] = 501
+	responseData := privateFields()
+	answer := privateFields()
+	answer["value"] = 1
+	responseData["answer"] = answer
+	responseData["code"] = "print('visible own answer')"
+	responseData["choices"] = []any{choice}
+	responseData["text"] = map[string]any{"value": "PRIVATE_SENTINEL"}
+	response["data"] = responseData
+	f.routes["/api/lessons/slides/203/questions"] = map[string]any{"questions": []any{question}}
+	f.routes["/api/lessons/slides/203/questions/responses"] = map[string]any{"responses": []any{response}}
+	snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer batch.Rollback()
+	encoded, _ := json.Marshal(snapshot)
+	for _, secret := range []string{"PRIVATE_SENTINEL", "privateStudent"} {
+		if strings.Contains(string(encoded), secret) {
+			t.Fatalf("assessment secret reached a stored/exported item: %s", secret)
+		}
+	}
+	quiz := materialByID(t, snapshot, "ed:slide:203")
+	lesson := materialByID(t, snapshot, "ed:lesson:101")
+	for _, required := range []string{"Visible question", "Visible choice", "Visible published explanation", "visible own answer"} {
+		if !strings.Contains(quiz.BodyMD, required) || !strings.Contains(lesson.BodyMD, required) {
+			t.Fatalf("necessary assessment field removed: %s", required)
+		}
+	}
+	if err := batch.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range snapshot.Files {
+		if file.Name == "lesson.md" {
+			contents, err := os.ReadFile(file.LocalPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(contents), "PRIVATE_SENTINEL") || strings.Contains(string(contents), "privateStudent") {
+				t.Fatal("generated lesson exported raw private data")
+			}
+		}
+	}
+}
+
+func TestEdMaterialsExportURLsUseSafeQueryWhitelist(t *testing.T) {
+	f := newMaterialFixture(t)
+	raw := f.srv.URL + "/api/files/signed.pdf?SessKey=PRIVATE_SENTINEL&API_KEY=PRIVATE_SENTINEL&Password=PRIVATE_SENTINEL&SESSION_COOKIE=PRIVATE_SENTINEL&credential=PRIVATE_SENTINEL&privateStudent=PRIVATE_SENTINEL&Part=2&id=10&dl=1"
+	encodedURL := strings.ReplaceAll(raw, "&", "&amp;")
+	lesson := f.routes["/api/lessons/101"].(map[string]any)["lesson"].(map[string]any)
+	lesson["content"] = `<paragraph><link href="` + encodedURL + `">Signed link</link></paragraph>`
+	slides := lesson["slides"].([]any)
+	slides[0].(map[string]any)["content"] = `<paragraph><file url="` + encodedURL + `" filename="signed.pdf"/></paragraph>`
+	slides[1].(map[string]any)["file_url"] = raw
+	slides[1].(map[string]any)["filename"] = "signed.pdf"
+	slides[4].(map[string]any)["video_url"] = raw
+	questions := f.routes["/api/lessons/slides/203/questions"].(map[string]any)["questions"].([]any)
+	questions[0].(map[string]any)["data"].(map[string]any)["explanation"] = "Published link: " + encodedURL
+	responses := f.routes["/api/lessons/slides/203/questions/responses"].(map[string]any)["responses"].([]any)
+	responses[0].(map[string]any)["data"].(map[string]any)["text"] = encodedURL
+	snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer batch.Rollback()
+	all, _ := json.Marshal(snapshot)
+	if strings.Contains(string(all), "PRIVATE_SENTINEL") || strings.Contains(string(all), "privateStudent") {
+		t.Fatal("URL credentials reached BodyMD, metadata, or SourceURL")
+	}
+	want := f.srv.URL + "/api/files/signed.pdf?dl=1&id=10&part=2"
+	matched := false
+	for _, file := range snapshot.Files {
+		if file.SourceURL == want {
+			matched = true
+		}
+	}
+	if !matched {
+		t.Fatal("safe display parameters were lost")
+	}
+	f.mu.Lock()
+	originalSent := false
+	for _, query := range f.fileQueries {
+		if strings.Contains(query, "SessKey=PRIVATE_SENTINEL") && strings.Contains(query, "API_KEY=PRIVATE_SENTINEL") {
+			originalSent = true
+		}
+	}
+	f.mu.Unlock()
+	if !originalSent {
+		t.Fatal("download did not retain its original signed request URL")
+	}
+	if err := batch.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if err := batch.Finish(); err != nil {
+		t.Fatal(err)
+	}
+	for _, file := range snapshot.Files {
+		if file.Name == "lesson.md" {
+			contents, _ := os.ReadFile(file.LocalPath)
+			if strings.Contains(string(contents), "PRIVATE_SENTINEL") {
+				t.Fatal("lesson.md leaked URL credentials")
+			}
+			manifest, err := os.ReadFile(filepath.Join(filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(file.LocalPath)))), ".mirror.json"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(manifest), "PRIVATE_SENTINEL") {
+				t.Fatal("manifest leaked URL credentials")
+			}
+		}
+	}
+}
+
+func TestEdMaterialURLParameterAliasesAndMalformedValues(t *testing.T) {
+	for _, raw := range []string{
+		"https://example.invalid/file?ID=1&Part=2&DL=TRUE&SeSsKeY=PRIVATE_SENTINEL&Api_Key=PRIVATE_SENTINEL&Password=PRIVATE_SENTINEL&COOKIE=PRIVATE_SENTINEL",
+		"HTTPS://example.invalid/file?ID=1&amp;Part=2&amp;DL=TRUE&amp;session_cookie=PRIVATE_SENTINEL&amp;credential=PRIVATE_SENTINEL",
+	} {
+		if clean := edMaterialCleanURL(raw); clean != "https://example.invalid/file?dl=true&id=1&part=2" {
+			t.Fatal(clean)
+		}
+	}
+	if clean := edMaterialCleanURL("https://example.invalid/file?id=PRIVATE_SENTINEL&part=PRIVATE_SENTINEL&dl=PRIVATE_SENTINEL&unknown=PRIVATE_SENTINEL"); clean != "https://example.invalid/file" {
+		t.Fatal(clean)
+	}
+	for range 20 {
+		if clean := edMaterialCleanURL("https://example.invalid/file?ID=2&id=1"); clean != "https://example.invalid/file?id=1&id=2" {
+			t.Fatal("unstable normalized parameters", clean)
+		}
+	}
+}
+
+func TestEdMaterialsExplicitFeatureAvailability(t *testing.T) {
+	for _, tc := range []struct {
+		name               string
+		features           any
+		lessons, resources bool
+	}{
+		{"unknown", nil, true, true},
+		{"null flags", map[string]any{"lessons": nil, "resources": nil}, true, true},
+		{"all disabled", map[string]any{"lessons": false, "resources": false}, false, false},
+		{"resources disabled", map[string]any{"resources": false}, true, false},
+		{"lessons disabled", map[string]any{"lessons": false, "resources": true}, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMaterialFixture(t)
+			f.routes["/api/user"] = map[string]any{"user": map[string]any{"id": 1}, "courses": []any{map[string]any{"course": map[string]any{"id": 10, "features": tc.features}, "role": map[string]any{"role": "student"}}}}
+			snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer batch.Rollback()
+			if slices.Contains(snapshot.Kinds, "lesson") != tc.lessons || slices.Contains(snapshot.Kinds, "resource") != tc.resources {
+				t.Fatal(snapshot.Kinds)
+			}
+			if (f.requests["/api/courses/10/lessons"] > 0) != tc.lessons || (f.requests["/api/courses/10/resources"] > 0) != tc.resources {
+				t.Fatal("explicitly disabled feature was probed")
+			}
+		})
+	}
+}
+
+func TestEdMaterialsDeadlineClearsAndUnknownFields(t *testing.T) {
+	for _, tc := range []struct {
+		name                             string
+		regular, effective               any
+		setEffective, missing, wantKnown bool
+	}{
+		{"null", nil, nil, false, false, true},
+		{"empty", "", nil, false, false, true},
+		{"zero", 0, nil, false, false, true},
+		{"string zero", "0", nil, false, false, true},
+		{"effective null", "2030-01-08T00:00:00Z", nil, true, false, true},
+		{"missing", nil, nil, false, true, false},
+		{"invalid", "not a timestamp", nil, false, false, false},
+		{"invalid override", "2030-01-08T00:00:00Z", "invalid", true, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newMaterialFixture(t)
+			listed := f.routes["/api/courses/10/lessons"].(map[string]any)["lessons"].([]any)[0].(map[string]any)
+			if tc.missing {
+				delete(listed, "due_at")
+			} else {
+				listed["due_at"] = tc.regular
+			}
+			if tc.setEffective {
+				listed["effective_due_at"] = tc.effective
+			}
+			snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer batch.Rollback()
+			if len(snapshot.Deadlines) != 1 || snapshot.Deadlines[0].DueAt != 0 {
+				t.Fatal(snapshot.Deadlines)
+			}
+			known := snapshot.DeadlineFields["ed:lesson:101"]
+			if known.Due != tc.wantKnown || !known.Opens || !known.Cutoff || !known.Status {
+				t.Fatal(known)
+			}
+			if (len(snapshot.Warnings) > 0) == tc.wantKnown {
+				t.Fatal("unknown timestamp did not preserve old data with a warning", snapshot.Warnings)
+			}
+		})
+	}
+	f := newMaterialFixture(t)
+	attempt := f.routes["/api/lessons/101/attempts/1"].(map[string]any)["attempt"].(map[string]any)
+	attempt["status"] = "unrecognized"
+	listed := f.routes["/api/courses/10/lessons"].(map[string]any)["lessons"].([]any)[0].(map[string]any)
+	listed["available_at"] = map[string]any{"unexpected": true}
+	delete(listed, "locked_at")
+	snapshot, batch, err := collectEdMaterials(context.Background(), f.p, f.course, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer batch.Rollback()
+	known := snapshot.DeadlineFields["ed:lesson:101"]
+	if known.Opens || !known.Due || known.Cutoff || known.Status || snapshot.Deadlines[0].SubmissionStatus != "" || snapshot.Deadlines[0].Completed {
+		t.Fatal("unavailable fields were invented", known, snapshot.Deadlines)
 	}
 }
