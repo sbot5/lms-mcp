@@ -116,13 +116,13 @@ func TestAllTimesMoveByOneOffset(t *testing.T) {
 		"due_at":       first.Add(48 * time.Hour).Format(time.RFC3339Nano),
 		"release_date": first.Add(24 * time.Hour).Format("2006-01-02"),
 		"timestamp":    first.Unix(), "modified_time": first.Add(time.Hour).UnixMilli(),
-		"unknown_date_text": first.Add(72 * time.Hour).Format(time.RFC3339),
+		"solutions_at": first.Add(72 * time.Hour).Format(time.RFC3339),
 	})
 	shifted, _ := time.Parse(time.RFC3339, value["created_at"].(string))
 	if shifted.Equal(first) || shifted.Year() != 2020 {
 		t.Fatalf("time was not shifted to a synthetic era: %+v", value)
 	}
-	for key, delta := range map[string]time.Duration{"due_at": 48 * time.Hour, "release_date": 24 * time.Hour, "unknown_date_text": 72 * time.Hour} {
+	for key, delta := range map[string]time.Duration{"due_at": 48 * time.Hour, "release_date": 24 * time.Hour, "solutions_at": 72 * time.Hour} {
 		got, _, ok := parseTime(value[key].(string))
 		if !ok || got.Sub(shifted) != delta {
 			t.Fatalf("time relationship changed for %s: %+v", key, value)
@@ -150,7 +150,7 @@ func tags(value string) []string {
 func TestXMLHTMLRetainsTagsNewlinesAndTextMagnitude(t *testing.T) {
 	text := "A private long paragraph with personal identifiers.\nAnother line 中文 preserved only in shape.\n"
 	markup := `<document><paragraph>` + text + `</paragraph><file url="https://private.example/files/999?token=JWT_SENTINEL" filename="Secret personal file.pdf"/><image src="https://private.example/avatar/999.png" ticket="TICKET_SENTINEL"/><b data-future="ATTRIBUTE_SENTINEL">Secret Person</b><!--COMMENT_SENTINEL--></document>`
-	b, value := sanitize(t, map[string]any{"id": 999, "content": markup, "unknown": text})
+	b, value := sanitize(t, map[string]any{"id": 999, "content": markup, "document": text})
 	got := value["content"].(string)
 	if strings.Join(tags(got), ",") != strings.Join(tags(markup), ",") {
 		t.Fatalf("tag structure changed: %s", got)
@@ -158,7 +158,7 @@ func TestXMLHTMLRetainsTagsNewlinesAndTextMagnitude(t *testing.T) {
 	if strings.Count(got, "\n") != strings.Count(markup, "\n") {
 		t.Fatal("markup line breaks changed")
 	}
-	plain := value["unknown"].(string)
+	plain := value["document"].(string)
 	if utf8.RuneCountInString(plain) != utf8.RuneCountInString(text) || strings.Count(plain, "\n") != strings.Count(text, "\n") {
 		t.Fatal("free text's length or line breaks changed")
 	}
@@ -195,6 +195,86 @@ func TestEnrollmentYearAndCodeStaySyntheticAndParseable(t *testing.T) {
 	})
 	if value["year"] == "2026" || value["year"] != "2020" || value["code"] == "DEMO0001" || !courseCode.MatchString(value["code"].(string)) {
 		t.Fatalf("enrollment schema values were leaked or became unparseable: %+v", value)
+	}
+}
+
+func TestArbitraryNamesCannotEscapeThroughObjectsQueriesOrMarkup(t *testing.T) {
+	const unknown = "sentinel_person"
+	const unknownID = "sentinel_person_id"
+	raw, _ := json.Marshal(map[string]any{
+		"users":   map[string]any{"Sentinel_Person": map[string]any{"id": 987}},
+		unknown:   map[string]any{unknownID: 987},
+		"id":      987,
+		"url":     "https://private.example/file?" + unknownID + "=987&" + unknown + "=private",
+		"content": "<document><" + unknown + " " + unknown + "=\"private\" " + unknownID + "=\"987\" AccessToken=\"PRIVATE_TOKEN\"><" + unknown + ">Private text</" + unknown + "></" + unknown + "></document>",
+	})
+	s := New()
+	b, err := s.JSON(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"Sentinel_Person", unknown, unknownID, "private.example", "PRIVATE_TOKEN", "AccessToken"} {
+		if strings.Contains(string(b), marker) {
+			t.Fatalf("source name or credential leaked through capture JSON: %s", b)
+		}
+	}
+	value := decode(t, b)
+	name := s.names[unknown]
+	idName := s.names[unknownID]
+	if name == "" || idName == "" || name == idName {
+		t.Fatal("unknown names did not receive distinct synthetic mappings")
+	}
+	if _, exists := value[name]; !exists {
+		t.Fatal("unknown object field was not preserved with its synthetic name")
+	}
+	users := value["users"].(map[string]any)
+	if _, exists := users[s.names["Sentinel_Person"]]; !exists {
+		t.Fatal("legal alphabetic user key was retained or dropped")
+	}
+	u, _ := url.Parse(value["url"].(string))
+	if u.Query().Get(idName) != toString(value["id"]) || u.Query().Get(name) == "" {
+		t.Fatal("URL query names/IDs did not share the object-field mapping")
+	}
+	z := html.NewTokenizer(strings.NewReader(value["content"].(string)))
+	var stack []string
+	var unknownStarts, unknownEnds int
+	for {
+		tt := z.Next()
+		if tt == html.ErrorToken {
+			break
+		}
+		token := z.Token()
+		switch tt {
+		case html.StartTagToken:
+			stack = append(stack, token.Data)
+			if token.Data == name {
+				unknownStarts++
+			}
+			for _, attr := range token.Attr {
+				if attr.Key != name && attr.Key != idName {
+					t.Fatalf("arbitrary attribute name escaped synthesis: %s", attr.Key)
+				}
+				if attr.Key == idName && attr.Val != toString(value["id"]) {
+					t.Fatal("attribute ID lost its reference mapping")
+				}
+			}
+		case html.EndTagToken:
+			if len(stack) == 0 || stack[len(stack)-1] != token.Data {
+				t.Fatalf("opening/closing tag rename mismatch: %s", value["content"])
+			}
+			stack = stack[:len(stack)-1]
+			if token.Data == name {
+				unknownEnds++
+			}
+		}
+	}
+	if len(stack) != 0 || unknownStarts != 2 || unknownEnds != 2 {
+		t.Fatal("repeated unknown markup names were not consistently renamed")
+	}
+	// A later document in this same capture uses exactly the same names.
+	next, err := s.JSON([]byte(`{"sentinel_person":{"sentinel_person_id":987}}`))
+	if err != nil || decode(t, next)[name].(map[string]any)[idName] != value["id"] {
+		t.Fatal("unknown names were not stable across an in-memory capture set")
 	}
 }
 

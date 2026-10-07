@@ -27,12 +27,13 @@ import (
 type Sanitizer struct {
 	ids      map[string]int
 	strings  map[string]int
+	names    map[string]string
 	shift    time.Duration
 	shiftSet bool
 }
 
 func New() *Sanitizer {
-	return &Sanitizer{ids: make(map[string]int), strings: make(map[string]int)}
+	return &Sanitizer{ids: make(map[string]int), strings: make(map[string]int), names: make(map[string]string)}
 }
 
 // JSON accepts one JSON document, synthesizes its values and returns indented
@@ -76,7 +77,73 @@ func normalized(key string) string {
 	}, key)
 }
 
-var schemaKey = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_:-]{0,79}$`)
+// Names are data too: an API object may be keyed by a person's name, and
+// markup/URL names may contain identifiers. Retain only this fixed Ed schema.
+var schemaFields = nameSet(`
+id user_id course_id module_id lesson_id slide_id question_id challenge_id
+resource_id attempt_id lesson_mark_id parent_id accepted_id last_viewed_slide_id
+created_by_bot_id user_ids student_id student_number
+user users course courses role course_role lessons lesson modules module_name
+resources resource questions responses quiz_responses challenge submissions
+attempt lesson_attempt lesson_mark thread threads answers comments items data
+index number title name code year session features settings discussion categories
+category subcategory subsubcategory content document html passage explanation
+solution selection text feedback comment source filename extension size link
+embedding file_url video_url url avatar_url mime mime_type content_type
+kind type state status is_hidden is_timed is_private is_anonymous is_answered
+is_staff_answered is_student_answered is_endorsed is_locked is_megathread is_pinned
+is_seen is_starred is_watched openable attempts slides vote_count view_count
+reply_count new_reply_count correct is_completed feedback_provided is_released
+released published staff_only has_pats auto_points score points max_points mark
+auto_mark rubric_mark mark_override rubric_items testcase_pass_count
+testcase_total_count created_at updated_at deleted_at submitted_at started_at
+completed_at available_at due_at locked_at solutions_at release_at opens_at
+cutoff_at closes_at effective_available_at effective_due_at effective_locked_at
+effective_solutions_at glanced_at graded_at email display timestamp release_date
+modified_time timecreated timemodified
+`)
+
+var queryNames = nameSet(`
+id user_id course_id courseID module_id lesson_id slide_id question_id challenge_id
+resource_id attempt_id lesson_mark_id thread_id mark_id dl limit offset sort
+sort_key filter category q query rubric_items no_comments
+`)
+
+var markupTags = nameSet(`
+document paragraph heading bold italic strike underline break code math link image
+file video snippet pre web-snippet list list-item item blockquote callout table
+table-row table-cell table-header spoiler mention poll option answer
+html head body title p h1 h2 h3 h4 h5 h6 b strong i em s del u br a img span div
+ul ol li tr td th thead tbody tfoot caption hr figure figcaption sub sup
+`)
+
+var markupAttrs = nameSet(`
+id user_id course_id lesson_id slide_id question_id challenge_id resource_id
+src href url filename alt title type language level style width height colspan
+rowspan start reversed checked selected value class target rel xmlns
+`)
+
+func nameSet(names string) map[string]bool {
+	result := make(map[string]bool)
+	for _, name := range strings.Fields(names) {
+		result[name] = true
+	}
+	return result
+}
+
+// Share the mapping across fields, query parameters, tags and attributes so
+// repeated unknown names stay consistent without retaining their spelling.
+func (s *Sanitizer) safeName(original string, allowed map[string]bool) string {
+	if allowed[original] {
+		return original
+	}
+	if result, exists := s.names[original]; exists {
+		return result
+	}
+	result := "field_" + strconv.Itoa(len(s.names)+1)
+	s.names[original] = result
+	return result
+}
 
 func sensitive(key string) bool {
 	n := normalized(key)
@@ -144,11 +211,9 @@ func (s *Sanitizer) walk(value any, key string) any {
 			if sensitive(k) {
 				continue
 			}
-			outKey := k
+			outKey := s.safeName(k, schemaFields)
 			if _, err := strconv.ParseUint(k, 10, 64); err == nil {
 				outKey = toString(s.id(json.Number(k)))
-			} else if !schemaKey.MatchString(k) {
-				outKey = "field_" + strconv.Itoa(s.label(k))
 			}
 			result[outKey] = s.walk(v[k], k)
 		}
@@ -361,11 +426,7 @@ func (s *Sanitizer) url(u *url.URL) string {
 			continue
 		}
 		for _, value := range u.Query()[key] {
-			if idField(key) {
-				query.Add(key, toString(s.id(value)))
-			} else {
-				query.Add("param-"+strconv.Itoa(s.label(key)), synthetic(value))
-			}
+			query.Add(s.safeName(key, queryNames), toString(s.walk(value, key)))
 		}
 	}
 	result.RawQuery = query.Encode()
@@ -392,13 +453,13 @@ func (s *Sanitizer) markup(value string) string {
 		case html.StartTagToken, html.SelfClosingTagToken:
 			token := z.Token()
 			result.WriteByte('<')
-			result.WriteString(token.Data)
+			result.WriteString(s.safeName(token.Data, markupTags))
 			for _, attr := range token.Attr {
 				if sensitive(attr.Key) {
 					continue
 				}
 				result.WriteByte(' ')
-				result.WriteString(attr.Key)
+				result.WriteString(s.safeName(attr.Key, markupAttrs))
 				result.WriteString("=\"")
 				v := s.walk(attr.Val, attr.Key)
 				result.WriteString(html.EscapeString(toString(v)))
@@ -409,7 +470,7 @@ func (s *Sanitizer) markup(value string) string {
 			}
 			result.WriteByte('>')
 		case html.EndTagToken:
-			result.WriteString("</" + z.Token().Data + ">")
+			result.WriteString("</" + s.safeName(z.Token().Data, markupTags) + ">")
 		}
 	}
 }
