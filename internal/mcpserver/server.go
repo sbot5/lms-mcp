@@ -2,6 +2,7 @@ package mcpserver
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -13,9 +14,10 @@ import (
 // Deps are the dependencies the MCP tools read. All tools are read-only toward
 // Ed and Moodle; sync only touches the local cache.
 type Deps struct {
-	DB     *store.DB
-	Sync   *syncer.Service
-	Status func() StatusReport // provider/credential status without secret values
+	DB       *store.DB
+	Sync     *syncer.Service
+	Status   func() StatusReport // provider/credential status without secret values
+	DataRoot string              // trusted attachment mirror root; never supplied by tool callers
 }
 
 // StatusReport summarizes configuration without exposing any secret value.
@@ -80,6 +82,7 @@ func New(d Deps) *mcp.Server {
 		Description: "Report a sync job's progress by job_id, or the current job when job_id is omitted.",
 		Annotations: readOnly("Sync status"),
 	}, d.syncStatus)
+	d.registerContent(s, readOnly)
 
 	return s
 }
@@ -112,6 +115,7 @@ type listCoursesOut struct {
 	Total      int         `json:"total"`
 	HasMore    bool        `json:"has_more"`
 	NextCursor string      `json:"next_cursor,omitempty"`
+	Truncated  bool        `json:"truncated"`
 }
 
 func (d Deps) listCourses(ctx context.Context, _ *mcp.CallToolRequest, in listCoursesIn) (*mcp.CallToolResult, listCoursesOut, error) {
@@ -126,17 +130,44 @@ func (d Deps) listCourses(ctx context.Context, _ *mcp.CallToolRequest, in listCo
 		}
 		filtered = append(filtered, c)
 	}
-	offset, err := DecodeCursor(in.Cursor)
+	offset, err := contentCursor(in.Cursor)
 	if err != nil {
 		return nil, listCoursesOut{}, err
 	}
-	lo, hi, page := Paginate(len(filtered), offset, in.Limit)
-	out := listCoursesOut{Total: len(filtered), HasMore: page.HasMore, NextCursor: page.NextCursor}
+	lo, hi, _ := Paginate(len(filtered), offset, in.Limit)
+	out := listCoursesOut{Courses: make([]courseOut, 0), Total: len(filtered)}
+	end := lo
 	for _, c := range filtered[lo:hi] {
-		out.Courses = append(out.Courses, courseOut{
+		entry := courseOut{
 			ID: c.ID, Code: c.Code, Term: c.Term, Title: c.Title,
 			Providers: providerLabel(c), Active: c.Active, Excluded: c.Excluded,
-		})
+		}
+		out.Courses = append(out.Courses, entry)
+		out.HasMore = end+1 < len(filtered)
+		if out.HasMore {
+			out.NextCursor = EncodeCursor(end + 1)
+		}
+		raw, _ := json.Marshal(out)
+		if len(raw) > BudgetChars && len(out.Courses) > 1 {
+			out.Courses = out.Courses[:len(out.Courses)-1]
+			out.Truncated = true
+			break
+		}
+		for cap := 8192; len(raw) > BudgetChars; cap /= 2 {
+			if cap < 16 {
+				return nil, listCoursesOut{}, fmt.Errorf("stored course identifiers exceed the output budget")
+			}
+			last := &out.Courses[len(out.Courses)-1]
+			last.Title, last.Code, last.Term = clipBytes(last.Title, cap), clipBytes(last.Code, cap), clipBytes(last.Term, cap)
+			out.Truncated = true
+			raw, _ = json.Marshal(out)
+		}
+		end++
+	}
+	out.HasMore = end < len(filtered)
+	out.NextCursor = ""
+	if out.HasMore {
+		out.NextCursor = EncodeCursor(end)
 	}
 	return nil, out, nil
 }
