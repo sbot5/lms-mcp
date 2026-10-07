@@ -20,6 +20,7 @@ const usage = `lms-mcp — read-only Ed and Moodle mirror with a stdio MCP serve
   auth moodle      store the Moodle session (cloud dev reads the environment)
   auth status      show which credentials are configured (values hidden)
   doctor           check credentials, connectivity, identity and courses
+  capture ed       save a synthetic offline fixture (-kind, -id/-course-id, -out)
   sync             synchronize now (-full for a full refresh)
   status           show local freshness without network access
   list             list configured courses
@@ -51,6 +52,8 @@ func Run(ctx context.Context, args []string, in io.Reader, out, errOut io.Writer
 		return runAuth(ctx, rest, in, out, errOut)
 	case "doctor":
 		return runDoctor(ctx, rest, out, errOut)
+	case "capture":
+		return runCapture(ctx, rest, out, errOut)
 	case "sync":
 		return runSync(ctx, rest, out, errOut)
 	case "status":
